@@ -1,0 +1,16 @@
+{
+  "informal": "Suppose that $f$ is holomorphic in an open set $\\Omega$. Prove that if $\\text{Re}(f)$ is constant, then $f$ is constant.\n\\begin{proof}\nLet $f(z)=f(x, y)=u(x, y)+i v(x, y)$, where $z=x+i y$.\nSince $\\operatorname{Re}(f)=$ constant,\n$$\n\\frac{\\partial u}{\\partial x}=0, \\frac{\\partial u}{\\partial y}=0 .\n$$\nBy the Cauchy-Riemann equations,\n$$\n\\frac{\\partial v}{\\partial x}=-\\frac{\\partial u}{\\partial y}=0 .\n$$\nThus, in $\\Omega$,\n$$\nf^{\\prime}(z)=\\frac{\\partial f}{\\partial x}=\\frac{\\partial u}{\\partial x}+i \\frac{\\partial v}{\\partial x}=0+0=0 .\n$$\nThus $f(z)$ is constant.\n\\end{proof}",
+  "header": "import Mathlib\n\nopen Complex Filter Function Metric Finset\nopen scoped BigOperators Topology\n",
+  "ground_truth": "theorem Shakarchi_exercise_1_13a {f : ℂ → ℂ} (Ω : Set ℂ) (a b : Ω) (h : IsOpen Ω)\n  (hf : DifferentiableOn ℂ f Ω) (hc : ∃ (c : ℝ), ∀ z ∈ Ω, (f z).re = c) :\n  f a = f b := sorry",
+  "use_beq": false,
+  "use_semantic": false,
+  "use_cycle_consistency": true,
+  "cycle_api_base_url": "http://127.0.0.1:8090/v1",
+  "cycle_model_name": "Qwen2.5-32B-Instruct",
+  "informalize_prompt_template": "Informalize: {formal_statement}",
+  "cycle_softmax_temperature": 3.5,
+  "cycle_temperature": 0.0,
+  "cycle_max_tokens": 1024,
+  "compile_timeout": 60,
+  "lean_server_url": "http://127.0.0.1:8001/api/check"
+}

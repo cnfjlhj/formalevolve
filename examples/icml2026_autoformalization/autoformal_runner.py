@@ -1,0 +1,5020 @@
+"""
+AutoformalizationRunner: ShinkaEvolve runner with repair_queue support.
+
+================================================================================
+                              设计理念概述
+================================================================================
+
+本文件是 autoformalization 系统的"进化主循环"，负责协调整个进化搜索过程。
+
+【为什么需要自定义 Runner？】
+ShinkaEvolve 的默认 EvolutionRunner 会把所有评估完的程序都存入 archive，
+但我们的规约要求：
+- compile_ok=0 的候选不能入 archive（约束 B）
+- compile_ok=0 的候选要进行修复尝试（repair）
+- 修复调用要计入预算（约束 C）
+
+所以我们创建 AutoformalizationRunner，继承 EvolutionRunner 并重写关键方法。
+
+【核心设计思想】
+1. 编译失败 ≠ 直接丢弃，而是给予修复机会（最多 2 次）
+2. 修复成功后重新评估，再决定是否入库
+3. 所有候选的"命运"最终都会被记录（成功入库 or 失败记录）
+
+【约束满足】
+- [A] Novelty only for compile_ok=1: 只有编译成功的候选才参与 novelty 检查
+- [B] Archive only compile_ok=1: 只有编译成功的候选才存入 archive
+- [C] Repair counts toward budget: 修复调用计入 LLM 调用预算
+- [E] Semantic repair（可选）: 仅当 compile_ok=1 & semantic_ok=0 时触发，且计入 LLM 调用预算
+
+================================================================================
+                              规约版本: v1.2
+================================================================================
+"""
+
+# =============================================================================
+# 标准库导入
+# =============================================================================
+import json
+import hashlib
+import logging
+import os
+import re
+import shutil
+import time
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+# =============================================================================
+# ShinkaEvolve 核心模块导入
+# =============================================================================
+# EvolutionRunner: 进化主循环的基类，我们继承它来添加 repair 逻辑
+# EvolutionConfig: 进化算法的配置
+# RunningJob: 表示一个正在运行的评估任务
+from shinka.core.runner import (
+    EvolutionRunner,
+    EvolutionConfig,
+    RunningJob,
+    FOLDER_PREFIX,
+    _lean_local_diff_stats,
+)
+# DatabaseConfig: 数据库配置
+# Program: 数据库中存储的程序对象
+from shinka.database import DatabaseConfig, Program
+# JobConfig: 任务配置
+from shinka.launch import JobConfig
+# extract_between: 从文本中提取代码块的工具函数
+from shinka.llm import extract_between
+from placeholder_guard import is_trivial_tautology_placeholder
+
+# 模型适配层：用于解析不同模型的输出格式
+try:
+    from model_adapters import get_model_adapter, is_kimina_model
+except ImportError:
+    # 如果 model_adapters 不可用，使用空实现
+    def get_model_adapter(model_name):
+        return None
+    def is_kimina_model(model_name):
+        return False
+
+logger = logging.getLogger(__name__)
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return bool(default)
+    return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(name: str) -> Optional[int]:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except Exception:
+        return None
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def _env_csv_list(name: str) -> List[str]:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return []
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def overwrite_edit_diff_for_final_candidate(
+    *,
+    patch_path: Optional[Path],
+    original_code: str,
+    final_code: str,
+    lang_ext: str,
+) -> Optional[str]:
+    """Overwrite `edit.diff` to reflect the FINAL evaluated candidate code.
+
+    Why:
+    - `apply_full_patch` writes `edit.diff` for the raw patch application.
+    - Later steps (e.g. parent preamble inheritance or EvolAST fallback) can
+      overwrite `main.lean`, making the on-disk `edit.diff` misleading.
+    """
+    if patch_path is None:
+        return None
+    try:
+        from shinka.edit.apply_diff import write_git_diff
+
+        diff_path = Path(patch_path)
+        write_git_diff(
+            original_code,
+            final_code,
+            filename=f"original.{lang_ext}",
+            out_path=diff_path,
+        )
+        return diff_path.read_text("utf-8")
+    except Exception:
+        return None
+
+
+@contextmanager
+def _temporary_env(updates: Dict[str, Optional[str]]):
+    """Temporarily override os.environ, restoring prior values on exit."""
+    old: Dict[str, Optional[str]] = {}
+    for k, v in (updates or {}).items():
+        old[k] = os.environ.get(k)
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = str(v)
+    try:
+        yield
+    finally:
+        for k, prev in old.items():
+            if prev is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = prev
+
+
+def _read_metrics_json(results_dir: str) -> Dict[str, Any]:
+    try:
+        path = Path(results_dir) / "metrics.json"
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+# =============================================================================
+# 配置类
+# =============================================================================
+
+@dataclass
+class RepairConfig:
+    """
+    Compile Repair 的配置。
+
+    【设计决策】
+    - max_repair_attempts = 2: 最多修复 2 次，避免无限循环
+    - repair_temperature = 0.7: 修复时用中等温度，减少 "no-op / 复读输入" 的重复尝试
+    - enabled = True: 默认启用，但可通过 CLI 的 --disable_repair 关闭（用于调试）
+
+    【为什么是 2 次？】
+    - 太少（1次）：可能错过简单的修复机会
+    - 太多（>3次）：浪费 token，且连续失败说明问题可能不是简单的语法错误
+
+    【何时关闭修复？】
+    - 调试评估器时，避免修复逻辑干扰
+    - 对比实验时，测试"有/无修复"的效果差异
+    """
+    # How many initial candidates to try at generation 0 (fixed strategy A).
+    num_init_candidates_gen0: int = 3
+
+    # Default compile-repair budget for gen>=1.
+    # SPEC v1.0: Generation ≥ 1最多 2 次。
+    max_repair_attempts: int = 2
+    # Allow a larger budget for generation 0 bootstrapping.
+    # Rationale: Lean4 statements often start non-compiling; a few extra repair
+    # attempts can quickly move the run into the feasible region.
+    max_repair_attempts_gen0: int = 5
+    repair_temperature: float = 0.7
+    enabled: bool = True
+
+
+@dataclass
+class TerminationConfig:
+    """
+    终止策略的配置。
+
+    【两种终止类型】
+    1. Budget Exhausted (硬停): 资源用尽，必须停止
+       - max_llm_calls: LLM 调用次数上限
+       - max_evals: 评估次数上限
+       - max_time_seconds: 运行时间上限
+
+    2. Exploration Stagnation (软停): 探索停滞，触发策略调整
+       - stagnation_generations: 连续多少代没有改进
+       - 触发后会尝试"软重置"（提高温度、增加 crossover 概率）
+       - 如果多次软重置仍无改进，才真正停止
+    """
+    # Budget limits (硬停)
+    max_llm_calls: Optional[int] = None
+    max_evals: Optional[int] = None
+    max_time_seconds: Optional[float] = None
+
+    # Stagnation detection (软停)
+    stagnation_generations: int = 5
+    max_soft_resets: int = 3
+
+    # Soft reset actions
+    reset_temperature_boost: float = 0.2
+    reset_crossover_boost: float = 0.1
+    # Increase parent diversity pressure under weighted sampling by boosting the
+    # shared usage-penalty knob (also used by cycle-softmax).
+    reset_parent_usage_penalty_boost: float = 0.5
+    reset_parent_usage_penalty_max: float = 5.0
+
+
+@dataclass
+class RepairQueueItem:
+    """
+    Repair Queue 中的一个项目。
+
+    当一个候选编译失败时，它不会被直接丢弃，而是进入这个队列等待修复。
+
+    【字段说明】
+    - program_id: 唯一标识符
+    - exec_fname: 原始程序文件路径
+    - results_dir: 结果保存目录
+    - generation: 来自哪一代
+    - parent_id: 父代程序 ID（用于追溯）
+    - compile_error_type: 错误类型（用于 repair prompt）
+    - compile_error_msg: 错误信息（用于 repair prompt）
+    - original_code: 原始的 Lean 代码（应包含 imports + theorem）
+    - repair_attempts: 已尝试修复的次数
+    - total_repair_cost: 修复过程中消耗的 API 成本
+    """
+    program_id: str
+    exec_fname: str
+    results_dir: str
+    generation: int
+    parent_id: Optional[str]
+    compile_error_type: str
+    compile_error_msg: str
+    original_code: str
+    repair_attempts: int = 0
+    total_repair_cost: float = 0.0
+    total_repair_llm_calls_used: int = 0
+
+
+# =============================================================================
+# Failure Buffer (约束 B 的实现)
+# =============================================================================
+
+@dataclass
+class FailureRecord:
+    """
+    失败记录。
+
+    【设计目的】
+    规约约束 B 要求：compile_ok=0 的候选不入 archive，但我们仍然需要记录它们，
+    用于：
+    1. 统计分析：了解失败的分布和原因
+    2. 经验提取：未来可能用于改进 prompt 或训练数据
+    3. 调试：追溯问题
+
+    【final_status 取值】
+    - "repair_success": 修复成功，已转入 archive
+    - "repair_exhausted": 修复次数用尽，仍然失败
+    - "no_repair": 未启用修复，直接记录失败
+    """
+    program_id: str
+    generation: int
+    compile_error_type: str
+    compile_error_msg: str
+    statement: str
+    repair_attempts: int
+    repair_llm_calls_used: int
+    final_status: str
+    timestamp: float
+
+
+class FailureBuffer:
+    """
+    失败候选的缓冲区。
+
+    【约束 B 的实现】
+    compile_fail 只记录到 failure_buffer，不参与 parent sampling。
+
+    这个类维护所有失败候选的记录，并提供统计功能。
+    """
+
+    def __init__(self, buffer_path: Optional[str] = None):
+        """
+        初始化 FailureBuffer。
+
+        Args:
+            buffer_path: 保存路径。如果提供，每次添加记录时会自动保存到文件。
+        """
+        self.records: List[FailureRecord] = []
+        self.buffer_path = buffer_path
+
+    def add(self, record: FailureRecord):
+        """添加一条失败记录，并自动保存。"""
+        self.records.append(record)
+        if self.buffer_path:
+            self._save()
+
+    def _save(self):
+        """保存到 JSON 文件。"""
+        if not self.buffer_path:
+            return
+        data = [
+            {
+                "program_id": r.program_id,
+                "generation": r.generation,
+                "compile_error_type": r.compile_error_type,
+                "compile_error_msg": r.compile_error_msg,
+                "statement": r.statement[:500],  # 截断以节省空间
+                "repair_attempts": r.repair_attempts,
+                "repair_llm_calls_used": int(getattr(r, "repair_llm_calls_used", 0) or 0),
+                "final_status": r.final_status,
+                "timestamp": r.timestamp,
+            }
+            for r in self.records
+        ]
+        with open(self.buffer_path, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        获取统计信息。
+
+        返回:
+            - total: 总记录数
+            - repair_success: 修复成功的数量
+            - repair_exhausted: 修复失败的数量
+            - no_repair: 未修复的数量
+            - error_types: 各错误类型的分布
+        """
+        if not self.records:
+            return {"total": 0}
+
+        repair_success = sum(1 for r in self.records if r.final_status == "repair_success")
+        repair_exhausted = sum(1 for r in self.records if r.final_status == "repair_exhausted")
+        no_repair = sum(1 for r in self.records if r.final_status == "no_repair")
+
+        error_types = {}
+        for r in self.records:
+            error_types[r.compile_error_type] = error_types.get(r.compile_error_type, 0) + 1
+
+        return {
+            "total": len(self.records),
+            "repair_success": repair_success,
+            "repair_exhausted": repair_exhausted,
+            "no_repair": no_repair,
+            "error_types": error_types,
+        }
+
+
+# =============================================================================
+# Repair Prompt 构建
+# =============================================================================
+
+LEAN_DECL_KEYWORDS = [
+    "theorem",
+    "instance",
+    "definition",
+    "structure",
+    "class",
+    "inductive",
+    "classInductive",
+    "opaque",
+    "def",
+    "lemma",
+    "example",
+    "axiom",
+    "abbrev",
+    "noncomputable",
+    "irreducible_def",
+]
+
+
+def remove_lean_comments(text: str) -> str:
+    """
+    移除 Lean 注释（单行和多行）。
+    """
+    text = re.sub(r"/-(.|\n)*?-/\s*", "", text)
+    text = "\n".join([line.split("--")[0].rstrip() for line in text.splitlines()])
+    return text
+
+
+def strip_header_lines(text: str) -> str:
+    """移除 import/open/open scoped 行，避免 header 重复。"""
+    cleaned = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("import "):
+            continue
+        if stripped.startswith("open scoped "):
+            continue
+        if stripped.startswith("open "):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
+def strip_evolve_markers(text: str) -> str:
+    """移除 EVOLVE-BLOCK 标记行。"""
+    cleaned = []
+    for line in text.splitlines():
+        if re.match(r"^\s*(?:#|//|--)?\s*EVOLVE-BLOCK-(?:START|END)\s*$", line):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
+def extract_first_declaration(text: str) -> str:
+    """提取第一条 Lean 顶层声明。
+
+    【修复】当找不到声明时返回空字符串而非原始文本，
+    避免 'none' 等无效输出被当作有效 statement 流转。
+    """
+    if not text:
+        return ""
+    lines = text.splitlines()
+    keyword_pattern = re.compile(
+        rf"^\s*(?:noncomputable\s+)?(?:{'|'.join(LEAN_DECL_KEYWORDS)})\b"
+    )
+    decl_idx = None
+    for i, line in enumerate(lines):
+        if keyword_pattern.search(line):
+            decl_idx = i
+            break
+    if decl_idx is None:
+        return ""  # 【修复】找不到声明时返回空字符串
+    start = decl_idx
+    while start > 0 and lines[start - 1].lstrip().startswith("@["):
+        start -= 1
+    next_idx = None
+    for j in range(decl_idx + 1, len(lines)):
+        if keyword_pattern.search(lines[j]):
+            next_idx = j
+            break
+    end = next_idx if next_idx is not None else len(lines)
+    return "\n".join(lines[start:end]).strip()
+
+
+def normalize_lean_statement(text: str) -> str:
+    """清理模型输出并抽取可编译的 Lean statement。
+
+    【修复】增加占位符过滤，阻断 'none' 等无效输出。
+    """
+    if not text:
+        return ""
+
+    # 【修复】过滤常见占位符（模型可能输出这些作为"无结果"标记）
+    INVALID_PLACEHOLDERS = {"none", "null", "nil", "n/a", "na", ""}
+    text_lower = text.strip().lower()
+    if text_lower in INVALID_PLACEHOLDERS:
+        return ""
+
+    cleaned = remove_lean_comments(text)
+    cleaned = strip_header_lines(cleaned)
+    cleaned = strip_evolve_markers(cleaned)
+    result = extract_first_declaration(cleaned)
+
+    # 【修复】再次检查结果是否为占位符
+    if result and result.strip().lower() in INVALID_PLACEHOLDERS:
+        return ""
+
+    return result
+
+
+def normalize_lean_code(text: str) -> str:
+    """Normalize a Lean snippet into a compile-ready Lean file (keep imports).
+
+    This is used for repair workflows where the candidate is expected to output a
+    complete Lean file (imports + theorem). We only strip:
+    - markdown code fences
+    - EVOLVE-BLOCK markers
+    """
+    if not text:
+        return ""
+
+    raw = str(text)
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+    m = re.search(r"```(?:lean4?|lean)\s*\n(.*?)```", raw, re.DOTALL)
+    if m:
+        raw = m.group(1)
+    else:
+        m2 = re.search(r"```\s*\n(.*?)```", raw, re.DOTALL)
+        if m2:
+            raw = m2.group(1)
+
+    raw = strip_evolve_markers(raw)
+    return raw.strip()
+
+
+def extract_best_lean_code_block_with_source(
+    raw_content: Optional[str],
+) -> tuple[Optional[str], str]:
+    """Extract the best Lean code block from a model response.
+
+    Repair workflows often include prompts that themselves contain fenced Lean code
+    blocks (e.g. the original failing code). Some models echo the prompt before
+    producing the final answer, so we prefer the *last* fenced block that contains
+    a top-level declaration.
+    """
+    if not raw_content:
+        return None, ""
+
+    text = str(raw_content)
+    blocks: list[str] = []
+    fence_source = ""
+
+    for m in re.finditer(r"```(?:lean4?|lean)\s*\n(.*?)```", text, re.DOTALL):
+        blocks.append(m.group(1))
+    if blocks:
+        fence_source = "lean_fence"
+    else:
+        for m in re.finditer(r"```\s*\n(.*?)```", text, re.DOTALL):
+            blocks.append(m.group(1))
+        if blocks:
+            fence_source = "fence"
+
+    for blk in reversed(blocks):
+        cand = normalize_lean_code(blk)
+        if normalize_lean_statement(cand):
+            return cand, fence_source
+
+    # Fallback (no code fence): some models output plain-text Lean code and may
+    # echo previous attempts. Prefer the *last* top-level declaration (ideally a
+    # theorem) to avoid reusing the original failing statement.
+    text = str(raw_content)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    text = strip_evolve_markers(text)
+    text = remove_lean_comments(text)
+
+    if not text:
+        return None, ""
+
+    lines = text.splitlines()
+    keyword_pattern = re.compile(
+        rf"^\s*(?:noncomputable\s+)?(?:{'|'.join(LEAN_DECL_KEYWORDS)})\b"
+    )
+    theorem_pattern = re.compile(r"^\s*(?:noncomputable\s+)?theorem\b")
+
+    decl_indices: list[int] = [i for i, ln in enumerate(lines) if keyword_pattern.search(ln)]
+    if not decl_indices:
+        return None, ""
+
+    theorem_indices = [i for i in decl_indices if theorem_pattern.search(lines[i])]
+    decl_idx = theorem_indices[-1] if theorem_indices else decl_indices[-1]
+
+    start = decl_idx
+    while start > 0 and lines[start - 1].lstrip().startswith("@["):
+        start -= 1
+
+    def _cut_end_at_sorry(start_idx: int) -> int:
+        for i in range(start_idx, len(lines)):
+            if re.search(r":=\s*by\s*sorry\b", lines[i]):
+                return i + 1
+        for i in range(start_idx, len(lines)):
+            if re.search(r"\bby\s+sorry\b", lines[i]):
+                return i + 1
+        last_sorry = None
+        for i in range(start_idx, len(lines)):
+            if re.search(r"\bsorry\b", lines[i]):
+                last_sorry = i
+        return (last_sorry + 1) if last_sorry is not None else len(lines)
+
+    end = _cut_end_at_sorry(start)
+
+    # Include a reasonable header/preamble: start from the last `import Mathlib`
+    # before the selected declaration (if present).
+    import_mathlib_idx = None
+    import_any_idx = None
+    for i in range(0, start):
+        stripped = lines[i].lstrip()
+        if stripped.startswith("import Mathlib"):
+            import_mathlib_idx = i
+        elif stripped.startswith("import "):
+            import_any_idx = i
+    header_start = (
+        import_mathlib_idx
+        if import_mathlib_idx is not None
+        else (import_any_idx if import_any_idx is not None else 0)
+    )
+
+    def _is_preamble_line(line: str) -> bool:
+        s = line.strip()
+        if not s:
+            return True
+        if s.startswith("@["):
+            return True
+        return bool(
+            re.match(
+                r"^\s*(?:import\b|open\b|open\s+scoped\b|set_option\b|attribute\b|namespace\b|section\b|universe\b|variable\b|variables\b)",
+                line,
+            )
+        )
+
+    header_lines = [ln for ln in lines[header_start:start] if _is_preamble_line(ln)]
+    decl_lines = lines[start:end]
+
+    # Ensure required imports exist (repair protocol expects them).
+    has_mathlib = any(ln.strip().startswith("import Mathlib") for ln in header_lines)
+    has_aesop = any(ln.strip().startswith("import Aesop") for ln in header_lines)
+    if not has_mathlib:
+        header_lines = ["import Mathlib"] + header_lines
+    if not has_aesop:
+        insert_at = 1 if header_lines and header_lines[0].strip().startswith("import Mathlib") else 0
+        header_lines = header_lines[:insert_at] + ["import Aesop"] + header_lines[insert_at:]
+
+    code = "\n".join([*header_lines, "", *decl_lines]).strip()
+    return (code, "no_fence") if normalize_lean_statement(code) else (None, "")
+
+
+def extract_best_lean_code_block(raw_content: Optional[str]) -> Optional[str]:
+    code, _source = extract_best_lean_code_block_with_source(raw_content)
+    return code
+
+
+def extract_lean_preamble(code: str) -> str:
+    """Extract the preamble (imports/opens/options) before the first declaration."""
+    s = normalize_lean_code(code)
+    if not s:
+        return ""
+    keyword_pattern = re.compile(
+        rf"^\s*(?:noncomputable\s+)?(?:{'|'.join(LEAN_DECL_KEYWORDS)})\b"
+    )
+    preamble_lines: list[str] = []
+    for line in s.splitlines():
+        if keyword_pattern.search(line):
+            break
+        preamble_lines.append(line)
+    return "\n".join(preamble_lines).strip()
+
+
+def extract_lean_preamble_for_inheritance(code: str) -> str:
+    """Extract a Lean preamble suitable for *inheritance*.
+
+    Differences vs `extract_lean_preamble`:
+    - Ignores standalone attribute annotations like `@[simp]` which belong to the
+      following declaration, not the file preamble.
+    - Still strips EVOLVE markers via `normalize_lean_code`.
+    """
+    s = normalize_lean_code(code)
+    if not s:
+        return ""
+    keyword_pattern = re.compile(
+        rf"^\s*(?:noncomputable\s+)?(?:{'|'.join(LEAN_DECL_KEYWORDS)})\b"
+    )
+    preamble_lines: list[str] = []
+    for line in s.splitlines():
+        if keyword_pattern.search(line):
+            break
+        if line.lstrip().startswith("@["):
+            continue
+        preamble_lines.append(line)
+    return "\n".join(preamble_lines).strip()
+
+
+_LEAN_PREAMBLE_DIRECTIVE_RE = re.compile(
+    r"^\s*(?:import\b|open\b|open\s+scoped\b|set_option\b|attribute\b|namespace\b|section\b|universe\b|variable\b|variables\b)"
+)
+
+
+def _lean_has_explicit_preamble(code: str) -> bool:
+    """Return True iff the candidate explicitly contains a Lean preamble.
+
+    Policy note (experiment semantics):
+    - `@[...]` attribute annotations are NOT considered "header/preamble".
+    - EVOLVE markers are ignored.
+    """
+    preamble = extract_lean_preamble_for_inheritance(code or "")
+    if not preamble.strip():
+        return False
+    for raw in preamble.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("--"):
+            continue
+        if line.startswith("@["):
+            continue
+        if _LEAN_PREAMBLE_DIRECTIVE_RE.match(raw):
+            return True
+    return False
+
+
+def rebase_lean_candidate_on_parent_preamble_if_missing(
+    *,
+    candidate_code: str,
+    parent_code: str,
+) -> tuple[str, bool, str]:
+    """If the candidate has NO explicit preamble, inherit the parent's preamble.
+
+    This implements the agreed policy:
+    - Only when the patch model outputs a theorem without any header/preamble,
+      we default to reusing the parent's header.
+    - If the candidate includes any explicit preamble directive (import/open/...),
+      we keep it unchanged (even if it's incomplete).
+    """
+    cand = str(candidate_code or "")
+    parent = str(parent_code or "")
+    if not cand.strip() or not parent.strip():
+        return cand, False, "empty_input"
+
+    if _lean_has_explicit_preamble(cand):
+        return cand, False, "candidate_has_preamble"
+
+    parent_preamble = extract_lean_preamble_for_inheritance(parent)
+    if not parent_preamble.strip():
+        return cand, False, "parent_preamble_empty"
+
+    stmt = normalize_lean_statement(cand)
+    if not stmt.strip():
+        return cand, False, "candidate_statement_empty"
+
+    body = "\n\n".join([parent_preamble.strip(), stmt.strip()]).strip()
+    has_markers = ("EVOLVE-BLOCK-START" in cand) or ("EVOLVE-BLOCK-START" in parent)
+    if has_markers and ("EVOLVE-BLOCK-START" not in body) and ("EVOLVE-BLOCK-END" not in body):
+        body = "-- EVOLVE-BLOCK-START\n" + body + "\n-- EVOLVE-BLOCK-END\n"
+    return body, True, "inherited_parent_preamble"
+
+
+def _strip_attribute_lines(stmt: str) -> str:
+    # Drop leading attribute annotations like:
+    # @[simp]
+    # @[aesop]
+    if not stmt:
+        return ""
+    return re.sub(r"(?m)^\s*@\[.*\]\s*\n?", "", stmt).strip()
+
+
+def _canonicalize_lean_for_exact_match(text: str) -> str:
+    """Canonicalize a Lean program for *exact duplicate* detection (hard gate).
+
+    Scope:
+    - Used only for equality checks (offspring==parent / offspring==cross inspiration).
+    - NOT a GTED substitute (no structural metric; no similarity scoring).
+    """
+    code = normalize_lean_code(text or "")
+    if not code:
+        return ""
+
+    preamble = extract_lean_preamble(code)
+    stmt = normalize_lean_statement(code)
+    stmt = _strip_attribute_lines(stmt)
+    if not stmt:
+        return ""
+
+    # Normalize whitespace aggressively to avoid "same statement, different spacing".
+    stmt = re.sub(r"\s+", " ", stmt).strip()
+
+    # Treat lemma as theorem for duplicate detection (we enforce theorem-only outputs).
+    stmt = re.sub(r"^(noncomputable\s+)?lemma\b", r"\1theorem", stmt)
+
+    # Normalize the declaration name (theorem my_xxx ...) to reduce superficial variance.
+    stmt = re.sub(
+        r"^(noncomputable\s+)?(theorem|def|definition|example|axiom|abbrev|instance)\s+[^\s:(]+",
+        r"\1\2 __NAME__",
+        stmt,
+    )
+
+    pre_lines = [ln.strip() for ln in (preamble or "").splitlines() if ln.strip()]
+    pre_norm = "\n".join(pre_lines)
+    return (pre_norm + "\n" + stmt) if pre_norm else stmt
+
+
+def _is_theorem_statement(text: str) -> bool:
+    stmt = normalize_lean_statement(text or "")
+    stmt = _strip_attribute_lines(stmt)
+    if not stmt:
+        return False
+    return bool(re.match(r"^\s*(?:noncomputable\s+)?theorem\b", stmt))
+
+
+def _check_required_lean_import_prefix(code: str) -> tuple[bool, str]:
+    """Check whether a Lean program starts with the required imports.
+
+    We allow leading blank lines and comment lines (including EVOLVE markers), but
+    the first two *non-empty, non-comment* lines must be:
+      1) import Mathlib
+      2) import Aesop
+    """
+    s = normalize_lean_code(code or "")
+    if not s:
+        return False, "empty_program"
+
+    meaningful: list[str] = []
+    for raw in s.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("--"):
+            continue
+        meaningful.append(line)
+        if len(meaningful) >= 2:
+            break
+
+    if len(meaningful) < 2:
+        return False, "missing_required_import_lines"
+    if meaningful[0] != "import Mathlib":
+        return False, "missing_import_mathlib"
+    if meaningful[1] != "import Aesop":
+        return False, "missing_import_aesop"
+    return True, ""
+
+
+def build_repair_prompt(
+    original_code: str,
+    compile_error_type: str,
+    compile_error_msg: str,
+    informal: str,
+    reference_header: str = "",
+) -> tuple[str, str]:
+    """
+    构建 repair prompt。
+
+    【设计目的】
+    当编译失败时，我们需要让 LLM 修复错误。这个函数构建修复用的 prompt。
+
+    【Prompt 设计原则】
+    1. 提供完整上下文：header、informal、原始 statement
+    2. 明确错误信息：error_type 和 error_msg
+    3. 限制修复范围：强调"只修复编译错误，不改变数学含义"
+
+    【为什么要强调"不改变数学含义"？】
+    如果 LLM 在修复时大幅修改 statement，可能会：
+    - 改变定理的数学含义
+    - 引入新的语义错误
+    - 导致搜索偏离正确方向
+
+    所以我们明确限制：只做最小必要的修复。
+
+    Args:
+        original_code: 原始的 Lean 代码（有编译错误；应包含 imports + theorem）
+        compile_error_type: 错误类型（如 type_mismatch）
+        compile_error_msg: 错误信息
+        informal: 自然语言描述（用于参考）
+
+    Returns:
+        (system_message, user_message) 元组
+    """
+    sys_msg = """You are an expert in Lean 4 theorem proving and Mathlib.
+
+You are doing SYNTAX / COMPILATION REPAIR.
+
+You will receive:
+- A natural language statement (the semantic target)
+- A Lean 4 file that fails to compile
+- Compiler error feedback
+
+Your job:
+- Produce a corrected Lean 4 file that compiles.
+
+IMPORTANT:
+- Fix compilation only; do NOT change the intended mathematical meaning.
+- Keep changes minimal (types, identifiers, imports, binder annotations, etc.).
+"""
+
+    orig_code = (original_code or "").strip()
+    # NOTE: Do NOT inject dataset headers into prompts (avoid contamination).
+    ref_hdr_block = ""
+
+    user_msg = f"""Natural language statement:
+{informal.strip()}
+{ref_hdr_block}
+Current Lean code (does NOT compile):
+<CURRENT_CODE>
+{orig_code}
+</CURRENT_CODE>
+
+Compiler feedback:
+- Error type: {compile_error_type}
+- Error message:
+```
+{compile_error_msg[:500]}
+```
+
+IMPORTANT:
+- The <CURRENT_CODE> above is INPUT; do NOT repeat it verbatim.
+- Your output MUST address the compiler feedback and produce compiling Lean code.
+- If you output the same code again, it will be treated as a failed repair.
+
+Hint (often relevant for type mismatches in equalities):
+- If a goal looks like `f = f 0` where `f : α → β`, then `f 0 : β` is not a function.
+  A minimal compilation fix is to make the RHS a function (e.g. `f = fun _ => f 0`)
+  or rewrite to a pointwise statement (e.g. `∀ z, f z = f 0`), keeping the intended meaning.
+
+Output requirements:
+1) Output EXACTLY ONE ```lean code block (no extra text).
+2) The code MUST start with:
+   import Mathlib
+   import Aesop
+3) You may add additional imports/opens/options after that if needed.
+4) Do NOT include any comments.
+5) Include EXACTLY ONE theorem, and end it with `:= by sorry`.
+"""
+
+    return sys_msg, user_msg
+
+
+def build_semantic_repair_prompt(
+    *,
+    original_code: str,
+    informal: str,
+    accuracy_confirmation: str,
+    reference_header: str = "",
+    previous_compile_error: str = "",
+) -> tuple[str, str]:
+    sys_msg = """You are an expert in mathematics and Lean 4 (Mathlib).
+
+You are doing SEMANTIC REPAIR.
+
+You will receive:
+- A natural language statement (the semantic target)
+- A Lean 4 file that is intended to formalize it
+- Critic feedback (Accuracy Confirmation) describing mismatches
+
+Your job:
+- Modify the Lean code so that the theorem statement matches the natural language statement.
+
+Rules:
+- You MAY change hypotheses and the conclusion if needed to match the semantics.
+- You MAY adjust/add imports/opens/options as needed to keep the file compiling.
+- Do NOT "solve" the task by weakening it to `True` or a tautology.
+- Do NOT include any comments.
+- Output a complete Lean 4 file starting with:
+  import Mathlib
+  import Aesop
+- Include exactly one theorem, ending with `:= by sorry`.
+"""
+
+    # NOTE: Do NOT inject dataset headers into prompts (avoid contamination).
+    ref_hdr_block = ""
+
+    prev_compile = (previous_compile_error or "").strip()
+    compile_feedback_block = ""
+    if prev_compile:
+        compile_feedback_block = f"\n\nCompiler feedback from the previous attempt:\n```\n{prev_compile[:800]}\n```\n"
+
+    user_msg = f"""Natural language statement:
+{informal.strip()}
+{ref_hdr_block}
+Current Lean code:
+<CURRENT_CODE>
+{(original_code or '').strip()}
+</CURRENT_CODE>
+
+Critic feedback (Accuracy Confirmation):
+{accuracy_confirmation.strip() if accuracy_confirmation else "(missing)"}
+{compile_feedback_block}
+Goal:
+- Modify the Lean theorem so that CriticLean would judge it as an exact formalization of the Natural language statement.
+- Address every mismatch mentioned in the Critic feedback.
+
+Output requirements:
+1) Output EXACTLY ONE ```lean code block (no extra text).
+2) The code MUST start with:
+   import Mathlib
+   import Aesop
+3) You may add additional imports/opens/options after that if needed.
+4) Do NOT include any comments.
+5) Include EXACTLY ONE theorem, and end it with `:= by sorry`.
+
+IMPORTANT:
+- The <CURRENT_CODE> above is INPUT; do NOT repeat it verbatim.
+
+Hint (often relevant when the informal claim says “f is constant on Ω”):
+- Make the *constancy* explicit in the statement, e.g.:
+  * `∃ c, ∀ z ∈ Ω, f z = c`, or
+  * `∀ z w, z ∈ Ω → w ∈ Ω → f z = f w`.
+  These are often easier for CriticLean to verify than a statement that only mentions a single pair of points.
+"""
+    return sys_msg, user_msg
+
+
+def _extract_accuracy_confirmation_from_critic_raw(reasons: str) -> str:
+    """Extract the '5. Accuracy Confirmation' section from CriticLean reasons."""
+    s = (reasons or "").strip()
+    if not s:
+        return ""
+    m = re.search(r"(?is)\\b5\\s*\\.?\\s*Accuracy\\s*Confirmation\\s*:?\\s*(.*)\\Z", s)
+    if m:
+        return m.group(1).strip()
+    m2 = re.search(r"(?is)\\b5\\s*\\.?\\s*Accuracy\\s*Confirmation\\b", s)
+    if not m2:
+        return ""
+    return s[m2.end() :].lstrip(" :\\n\\t").strip()
+
+
+# =============================================================================
+# AutoformalizationRunner
+# =============================================================================
+
+class AutoformalizationRunner(EvolutionRunner):
+    """
+    扩展的 EvolutionRunner，支持 repair_queue。
+
+    ================================================================================
+                              这是进化主循环的"大脑"
+    ================================================================================
+
+    【继承关系】
+    AutoformalizationRunner → EvolutionRunner → (ShinkaEvolve 核心)
+
+    【重写的关键方法】
+    - _process_completed_job(): 处理评估完成的候选，添加 repair 逻辑
+
+    【新增功能】
+    1. repair_queue: 管理需要修复的候选
+    2. failure_buffer: 记录所有失败的候选
+    3. termination logic: 失败分类和终止策略
+
+    【约束满足】
+    - [A] Novelty only for compile_ok=1: 在 _process_completed_job 中实现
+    - [B] Archive only compile_ok=1: 在 _process_completed_job 中实现
+    - [C] Repair counts toward budget: 在 _process_repair 中实现
+    - [E] Semantic repair（可选）: 对 compile_ok=1 & semantic_ok=0 触发二次修复
+    """
+
+    def __init__(
+        self,
+        evo_config: EvolutionConfig,
+        job_config: JobConfig,
+        db_config: DatabaseConfig,
+        repair_config: Optional[RepairConfig] = None,
+        termination_config: Optional[TerminationConfig] = None,
+        problem_config: Optional[Dict[str, Any]] = None,
+        verbose: bool = True,
+    ):
+        """
+        初始化 AutoformalizationRunner。
+
+        Args:
+            evo_config: 进化配置（来自 ShinkaEvolve）
+            job_config: 任务配置
+            db_config: 数据库配置
+            repair_config: 修复配置（可选，默认使用 RepairConfig()）
+            termination_config: 终止配置（可选）
+            problem_config: 问题配置（informal, header 等）
+            verbose: 是否输出详细日志
+        """
+        # 调用父类构造函数
+        super().__init__(evo_config, job_config, db_config, verbose)
+
+        # Repair 配置
+        self.repair_config = repair_config or RepairConfig()
+
+        # 终止配置
+        self.termination_config = termination_config or TerminationConfig()
+
+        # 问题配置（informal, header 等）
+        self.problem_config = problem_config or self._load_problem_config()
+
+        # Optional experiment knobs (wired via env/launcher for reproducibility).
+        #
+        # - EvolAST fallback: if enabled, we may apply deterministic AST rewrites on the parent
+        #   when the LLM patch is an exact duplicate (and repair is disabled), to avoid "no-op" collapse.
+        # - Seedbank debit: if enabled, count each seedbank seed as N "budget calls" (fairness).
+        self.enable_evolast_fallback: bool = _env_truthy("AUTOFORMAL_ENABLE_EVOLAST_FALLBACK", default=False)
+        self.seedbank_debit_calls: bool = _env_truthy("AUTOFORMAL_SEEDBANK_DEBIT_CALLS", default=False)
+        self.seedbank_calls_per_seed: int = int(_env_int("AUTOFORMAL_SEEDBANK_CALLS_PER_SEED") or 0)
+        self.seedbank_debit_seed0: bool = _env_truthy("AUTOFORMAL_SEEDBANK_DEBIT_SEED0", default=False)
+        self.seedbank_debited_calls: int = 0
+
+        # LLM 模式（real/mock/replay/auto fallback）与可审计元数据
+        self.llm_mode_requested: str = ""
+        self.llm_mode_effective: str = ""
+        self.llm_unavailable: bool = False
+        self.llm_unavailable_reason: str = ""
+        self.baseline_mode: str = str(
+            self.problem_config.get("baseline_mode")
+            or os.environ.get("AUTOFORMAL_BASELINE_MODE", "ours")
+            or "ours"
+        ).strip()
+        # Global kill-switch: disable semantic evaluation/repair end-to-end.
+        if _env_truthy("AUTOFORMAL_DISABLE_SEMANTIC", default=False):
+            try:
+                self.problem_config["use_semantic"] = False
+            except Exception:
+                pass
+        # Semantic repair:
+        # - Requires `use_semantic=true` (otherwise semantic_ok is N/A).
+        # - Default: OFF (opt-in), but can be explicitly enabled via env/config.
+        env_val = os.environ.get("AUTOFORMAL_ENABLE_SEMANTIC_REPAIR")
+        cfg_val = self.problem_config.get("enable_semantic_repair", None)
+        if env_val is not None and str(env_val).strip() != "":
+            semantic_repair_enabled = _env_truthy(
+                "AUTOFORMAL_ENABLE_SEMANTIC_REPAIR", default=False
+            )
+        elif cfg_val is not None and str(cfg_val).strip() != "":
+            semantic_repair_enabled = str(cfg_val).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "y",
+                "on",
+            }
+        else:
+            semantic_repair_enabled = False
+        self.semantic_repair_enabled = bool(semantic_repair_enabled)
+        self.semantic_repair_max_attempts: Optional[int] = _env_int("AUTOFORMAL_SEMANTIC_REPAIR_MAX_ATTEMPTS")
+        self.semantic_repair_max_attempts_gen0: Optional[int] = _env_int(
+            "AUTOFORMAL_SEMANTIC_REPAIR_MAX_ATTEMPTS_GEN0"
+        )
+        self.semantic_repair_temperature: float = _env_float("AUTOFORMAL_SEMANTIC_REPAIR_TEMPERATURE", 0.7)
+
+        # Optional: stage semantic repair to late budget, to avoid burning early exploration calls.
+        # If unset or <=0, semantic repair can run immediately when enabled.
+        self.semantic_repair_start_calls: Optional[int] = _env_int("AUTOFORMAL_SEMANTIC_REPAIR_START_CALLS")
+        if self.semantic_repair_start_calls is not None and int(self.semantic_repair_start_calls) <= 0:
+            self.semantic_repair_start_calls = None
+
+        # Optional: skip compile-repair for certain compile error types (budget triage).
+        # Example: AUTOFORMAL_REPAIR_SKIP_ERROR_TYPES=typeclass_error
+        self.repair_skip_error_types: set[str] = {
+            t.strip().lower() for t in _env_csv_list("AUTOFORMAL_REPAIR_SKIP_ERROR_TYPES")
+        }
+
+        self._configure_llm_clients()
+        self._write_run_metadata()
+        self._write_run_config()
+
+        # Repair Queue: 存放需要修复的候选
+        self.repair_queue: List[RepairQueueItem] = []
+
+        # Failure Buffer: 记录所有失败（约束 B）
+        failure_buffer_path = f"{self.results_dir}/failure_buffer.json"
+        self.failure_buffer = FailureBuffer(failure_buffer_path)
+
+        # 预算跟踪（约束 C）
+        self.total_repair_llm_calls = 0
+        self.total_repair_evals = 0
+        self.total_repair_cost = 0.0
+        self.total_semantic_repair_llm_calls = 0
+        self.total_semantic_repair_evals = 0
+        self.total_semantic_repair_cost = 0.0
+        self.total_semantic_repair_successes = 0
+
+        # 终止跟踪
+        self.start_time = time.time()
+        self.soft_resets_count = 0
+        self.best_fitness_tuple: Optional[tuple] = None
+        self.generations_without_improvement = 0
+        self.termination_reason: Optional[str] = None
+        self._last_meta_update_generation: int = -1
+
+        # Seed0(file) 剔除标志：当有其它 compile_ok=1 程序进入 archive 后，
+        # 删除来自 `--init_program` 的 seed0（仅 file seed0），避免搜索长期依赖占位符。
+        self._file_seed0_pruned: bool = False
+
+        # 打印初始化信息
+        logger.info("=" * 60)
+        logger.info("AutoformalizationRunner initialized (规约 v1.2)")
+        logger.info(f"  Repair enabled: {self.repair_config.enabled}")
+        logger.info(f"  Max repair attempts: {self.repair_config.max_repair_attempts}")
+        logger.info(f"  Repair temperature: {self.repair_config.repair_temperature}")
+        logger.info(f"  Max LLM calls: {self.termination_config.max_llm_calls}")
+        logger.info(f"  Stagnation gens: {self.termination_config.stagnation_generations}")
+        logger.info(f"  LLM mode: requested={self.llm_mode_requested}, effective={self.llm_mode_effective}")
+        if self.llm_unavailable:
+            logger.info(f"  LLM unavailable: {self.llm_unavailable_reason}")
+        logger.info("=" * 60)
+
+    def _configure_llm_clients(self) -> None:
+        """Configure generator/repair LLM client.
+
+        Requirements:
+        - No-LLM smoke tests must run without network dependencies.
+        - When `--llm_mode=auto`, probe base_url and fallback to MockLLM if unreachable,
+          recording `llm_unavailable=1` + reason for audit.
+        """
+        from offline_llm import MockLLMClient, ReplayLLMClient, load_mock_statements, probe_openai_base_url
+
+        def truthy(v: Any) -> bool:
+            return str(v or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        requested = str(
+            self.problem_config.get("llm_mode")
+            or os.environ.get("AUTOFORMAL_LLM_MODE", "auto")
+            or "auto"
+        ).strip().lower()
+
+        no_llm = truthy(self.problem_config.get("no_llm")) or truthy(os.environ.get("AUTOFORMAL_NO_LLM"))
+        replay_path = (
+            self.problem_config.get("replay_path")
+            or os.environ.get("AUTOFORMAL_REPLAY_PATH")
+            or ""
+        )
+        mock_path = (
+            self.problem_config.get("mock_statements_path")
+            or os.environ.get("AUTOFORMAL_MOCK_STATEMENTS_PATH")
+            or ""
+        )
+        mock_statements = load_mock_statements(mock_path)
+
+        self.llm_mode_requested = requested
+        self.llm_unavailable = False
+        self.llm_unavailable_reason = ""
+
+        # Hard override: `no_llm` disables all external LLM usage.
+        if no_llm:
+            # Preserve the original model name for dynamic sampling compatibility
+            original_model_name = self.llm.model_names[0] if hasattr(self.llm, 'model_names') and self.llm.model_names else "mock"
+            self.llm = MockLLMClient(statements=mock_statements, model_name=original_model_name)
+            self.llm_mode_effective = "mock"
+            self.llm_unavailable = True
+            self.llm_unavailable_reason = "no_llm=1"
+        elif requested == "mock":
+            # Preserve the original model name for dynamic sampling compatibility
+            original_model_name = self.llm.model_names[0] if hasattr(self.llm, 'model_names') and self.llm.model_names else "mock"
+            self.llm = MockLLMClient(statements=mock_statements, model_name=original_model_name)
+            self.llm_mode_effective = "mock"
+            self.llm_unavailable = True
+            self.llm_unavailable_reason = "llm_mode=mock"
+        elif requested == "replay":
+            try:
+                self.llm = ReplayLLMClient(jsonl_path=replay_path)
+                self.llm_mode_effective = "replay"
+                self.llm_unavailable = True
+                self.llm_unavailable_reason = f"llm_mode=replay:{replay_path}"
+            except Exception as e:
+                # Replay is optional; fallback to MockLLM to keep runs usable.
+                original_model_name = self.llm.model_names[0] if hasattr(self.llm, 'model_names') and self.llm.model_names else "mock"
+                self.llm = MockLLMClient(statements=mock_statements, model_name=original_model_name)
+                self.llm_mode_effective = "mock"
+                self.llm_unavailable = True
+                self.llm_unavailable_reason = f"replay_failed:{type(e).__name__}:{e}"
+        elif requested == "auto":
+            base_url = (
+                os.environ.get("OPENAI_LLM_BASE_URL")
+                or self.problem_config.get("openai_llm_base_url")
+                or ""
+            )
+            avail = probe_openai_base_url(base_url)
+            if not avail.ok:
+                original_model_name = self.llm.model_names[0] if hasattr(self.llm, 'model_names') and self.llm.model_names else "mock"
+                self.llm = MockLLMClient(statements=mock_statements, model_name=original_model_name)
+                self.llm_mode_effective = "mock"
+                self.llm_unavailable = True
+                self.llm_unavailable_reason = f"auto_fallback:{avail.reason}"
+            else:
+                self.llm_mode_effective = "real"
+        else:
+            # requested == "real" (or unknown): keep the default LLMClient from base runner.
+            self.llm_mode_effective = "real"
+
+        # When using offline generation, disable meta-LLM & novelty-LLM to avoid hidden calls.
+        if self.llm_mode_effective in {"mock", "replay"}:
+            self.meta_llm = None
+            self.novelty_llm = None
+            try:
+                self.meta_summarizer.meta_llm_client = None
+            except Exception:
+                pass
+            try:
+                self.novelty_judge.novelty_llm_client = None
+            except Exception:
+                pass
+
+        # Patch-only LLM override: allow using a different model (and optionally base_url)
+        # for edit proposals, while keeping Gen0 sampling on the main generator model.
+        #
+        # Env:
+        # - AUTOFORMAL_PATCH_OPENAI_LLM_BASE_URL (optional; empty uses OPENAI_LLM_BASE_URL/OpenAI SDK default)
+        # - AUTOFORMAL_PATCH_LLM_MODELS (comma-separated; when set, enables patch override)
+        self.patch_llm = self.llm
+        self.patch_llm_enabled = False
+        if self.llm_mode_effective == "real":
+            patch_llm = self._patch_llm_override()
+            if patch_llm.get("enabled"):
+                try:
+                    from shinka.llm import LLMClient
+
+                    llm_kwargs = dict(getattr(self.evo_config, "llm_kwargs", {}) or {})
+                    self.patch_llm = LLMClient(
+                        model_names=list(patch_llm.get("model_names", []) or []),
+                        temperatures=llm_kwargs.get("temperatures", 0.75),
+                        max_tokens=llm_kwargs.get("max_tokens", 4096),
+                        reasoning_efforts=llm_kwargs.get("reasoning_efforts", "auto"),
+                        model_sample_probs=llm_kwargs.get("model_sample_probs", None),
+                        base_url=patch_llm.get("base_url") or None,
+                        verbose=bool(getattr(self, "verbose", False)),
+                    )
+                    self.patch_llm_enabled = True
+                except Exception as e:
+                    logger.warning(
+                        "[LLM] Failed to enable patch override; falling back to main LLM. "
+                        f"error={type(e).__name__}:{e}"
+                    )
+                    self.patch_llm = self.llm
+                    self.patch_llm_enabled = False
+
+        # Enforce strict generator-call budget across ALL generation-side LLM clients.
+        #
+        # - We cap both `self.llm` and `self.patch_llm` dynamically (see `_sync_generation_llm_budget_caps`)
+        #   so internal retries cannot overshoot `max_llm_calls`.
+        try:
+            self._sync_generation_llm_budget_caps()
+        except Exception:
+            pass
+
+    def _repair_llm_override(self) -> Dict[str, Any]:
+        """Repair-only LLM override (A: main generation remains unchanged).
+
+        Env:
+        - AUTOFORMAL_REPAIR_OPENAI_LLM_BASE_URL: OpenAI-compatible base URL (e.g. Kimina: http://127.0.0.1:8009/v1)
+        - AUTOFORMAL_REPAIR_LLM_MODELS: comma-separated model names (first is used)
+        """
+        base_url = (os.environ.get("AUTOFORMAL_REPAIR_OPENAI_LLM_BASE_URL") or "").strip()
+        model_names = _env_csv_list("AUTOFORMAL_REPAIR_LLM_MODELS")
+        model_name = model_names[0] if model_names else ""
+        return {
+            "enabled": bool(base_url and model_name),
+            "base_url": base_url,
+            "model_names": model_names,
+            "model_name": model_name,
+        }
+
+    def _patch_llm_override(self) -> Dict[str, Any]:
+        """Patch-only LLM override (edit proposals).
+
+        This lets you use a specialized patch model (e.g. Qwen3-Patch) without
+        changing Gen0 sampling (which can be served by a different model, or a seed bank).
+
+        Env:
+        - AUTOFORMAL_PATCH_OPENAI_LLM_BASE_URL (optional): OpenAI-compatible base URL.
+          If empty, uses OPENAI_LLM_BASE_URL/OpenAI SDK default.
+        - AUTOFORMAL_PATCH_LLM_MODELS: comma-separated model names (first is used)
+        """
+        base_url = (os.environ.get("AUTOFORMAL_PATCH_OPENAI_LLM_BASE_URL") or "").strip()
+        model_names = _env_csv_list("AUTOFORMAL_PATCH_LLM_MODELS")
+        model_name = model_names[0] if model_names else ""
+        return {
+            "enabled": bool(model_name),
+            "base_url": base_url,
+            "model_names": model_names,
+            "model_name": model_name,
+        }
+
+    def _write_run_metadata(self) -> None:
+        """Write run-level metadata for auditability (no LLM required)."""
+        try:
+            repair_llm = self._repair_llm_override()
+            patch_llm = self._patch_llm_override()
+            data = {
+                "spec_version": "v1.2",
+                "created_at_unix": time.time(),
+                "results_dir": str(self.results_dir),
+                "baseline_mode": self.baseline_mode,
+                "seed": self.problem_config.get("seed", None),
+                "llm_mode_requested": self.llm_mode_requested,
+                "llm_mode_effective": self.llm_mode_effective,
+                "llm_unavailable": int(bool(self.llm_unavailable)),
+                "llm_unavailable_reason": self.llm_unavailable_reason,
+                "openai_llm_base_url": os.environ.get("OPENAI_LLM_BASE_URL", ""),
+                "llm_models": list(getattr(self.evo_config, "llm_models", []) or []),
+                "patch_llm_enabled": int(bool(getattr(self, "patch_llm_enabled", False))),
+                "patch_openai_llm_base_url": patch_llm.get("base_url", ""),
+                "patch_llm_models": list(patch_llm.get("model_names", []) or []),
+                "repair_openai_llm_base_url": repair_llm.get("base_url", ""),
+                "repair_llm_models": list(repair_llm.get("model_names", []) or []),
+                "no_llm": bool(
+                    str(self.problem_config.get("no_llm", "")).strip().lower()
+                    in {"1", "true", "yes", "y", "on"}
+                ),
+                "problem_config_preview": {
+                    "informal_preview": (self.problem_config.get("informal", "") or "")[:200],
+                    "use_semantic": bool(self.problem_config.get("use_semantic", False)),
+                    "use_cycle_consistency": bool(self.problem_config.get("use_cycle_consistency", True)),
+                    "cycle_api_base_url": self.problem_config.get("cycle_api_base_url"),
+                    "cycle_model_name": self.problem_config.get("cycle_model_name"),
+                    "critic_lean_url": os.environ.get("CRITIC_LEAN_URL", ""),
+                    "critic_lean_model": os.environ.get("CRITIC_LEAN_MODEL", ""),
+                    "lean_server_url": self.problem_config.get("lean_server_url"),
+                },
+                "evolution_config_preview": {
+                    "num_generations": int(getattr(self.evo_config, "num_generations", 0) or 0),
+                    "patch_types": list(getattr(self.evo_config, "patch_types", []) or []),
+                    "patch_type_probs": list(getattr(self.evo_config, "patch_type_probs", []) or []),
+                    "max_patch_attempts": int(getattr(self.evo_config, "max_patch_attempts", 0) or 0),
+                    "max_patch_resamples": int(getattr(self.evo_config, "max_patch_resamples", 0) or 0),
+                },
+                "database_config_preview": {
+                    "parent_selection_strategy": getattr(self.db_config, "parent_selection_strategy", None),
+                    "cycle_softmax_temperature": getattr(self.db_config, "cycle_softmax_temperature", None),
+                    "parent_usage_penalty_alpha": getattr(self.db_config, "parent_usage_penalty_alpha", None),
+                    "num_islands": getattr(self.db_config, "num_islands", None),
+                    "archive_size": getattr(self.db_config, "archive_size", None),
+                    "num_archive_inspirations": getattr(self.db_config, "num_archive_inspirations", None),
+                    "num_top_k_inspirations": getattr(self.db_config, "num_top_k_inspirations", None),
+                },
+                "repair_config_preview": {
+                    "num_init_candidates_gen0": int(getattr(self.repair_config, "num_init_candidates_gen0", 0) or 0),
+                    "max_repair_attempts": int(getattr(self.repair_config, "max_repair_attempts", 0) or 0),
+                    "max_repair_attempts_gen0": int(getattr(self.repair_config, "max_repair_attempts_gen0", 0) or 0),
+                    "repair_temperature": float(getattr(self.repair_config, "repair_temperature", 0.0) or 0.0),
+                    "skip_error_types": sorted(list(self.repair_skip_error_types or [])),
+                },
+                "semantic_repair_config_preview": {
+                    "enabled": bool(self.semantic_repair_enabled),
+                    "start_calls": self.semantic_repair_start_calls,
+                    "max_attempts": self.semantic_repair_max_attempts,
+                    "max_attempts_gen0": self.semantic_repair_max_attempts_gen0,
+                    "temperature": float(self.semantic_repair_temperature),
+                },
+                "termination_config_preview": {
+                    "max_llm_calls": getattr(self.termination_config, "max_llm_calls", None),
+                    "max_evals": getattr(self.termination_config, "max_evals", None),
+                    "max_time_seconds": getattr(self.termination_config, "max_time_seconds", None),
+                },
+            }
+            out = Path(self.results_dir) / "run_metadata.json"
+            out.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            return
+
+    def _write_run_config(self) -> None:
+        """Write the protocol-critical run configuration (implementation-aligned)."""
+        try:
+            def _get_env_int(name: str, default: int) -> int:
+                try:
+                    return int(os.environ.get(name, str(default)))
+                except Exception:
+                    return default
+
+            def _get_env_float(name: str, default: float) -> float:
+                try:
+                    return float(os.environ.get(name, str(default)))
+                except Exception:
+                    return default
+
+            db_cfg = self.db_config
+            evo_cfg = self.evo_config
+            rep_cfg = self.repair_config
+            repair_llm = self._repair_llm_override()
+            patch_llm = self._patch_llm_override()
+
+            data = {
+                "spec_version": "v1.2",
+                "created_at_unix": time.time(),
+                "results_dir": str(self.results_dir),
+                "baseline_mode": self.baseline_mode,
+                "seed": self.problem_config.get("seed", None),
+                "protocol": {
+                    "enforce_island_separation": bool(
+                        getattr(db_cfg, "enforce_island_separation", True)
+                    ),
+                    "num_islands": int(getattr(db_cfg, "num_islands", 0) or 0),
+                    "archive_size": int(getattr(db_cfg, "archive_size", 0) or 0),
+                    "parent_selection_strategy": str(
+                        getattr(db_cfg, "parent_selection_strategy", "")
+                    ),
+                    "cycle_softmax_temperature": float(
+                        getattr(db_cfg, "cycle_softmax_temperature", 3.5) or 3.5
+                    ),
+                    "parent_usage_penalty_alpha": float(
+                        getattr(db_cfg, "parent_usage_penalty_alpha", 0.05) or 0.05
+                    ),
+                    "elite_selection_ratio": float(
+                        getattr(db_cfg, "elite_selection_ratio", 0.3) or 0.3
+                    ),
+                    "num_archive_inspirations": int(
+                        getattr(db_cfg, "num_archive_inspirations", 0) or 0
+                    ),
+                    "num_top_k_inspirations": int(
+                        getattr(db_cfg, "num_top_k_inspirations", 0) or 0
+                    ),
+                    "patch_types": list(getattr(evo_cfg, "patch_types", []) or []),
+                    "patch_type_probs": list(
+                        getattr(evo_cfg, "patch_type_probs", []) or []
+                    ),
+                    "cross_k": _get_env_int("AUTOFORMAL_CROSS_K", 1),
+                    "cross_insp_temperature": _get_env_float(
+                        "AUTOFORMAL_CROSS_INSP_TEMPERATURE",
+                        _get_env_float("SOFTMAX_TEMPERATURE", 3.5),
+                    ),
+                    "cross_insp_penalty_alpha": _get_env_float(
+                        "AUTOFORMAL_CROSS_INSP_PENALTY_ALPHA", 1.0
+                    ),
+                    "cross_insp_penalty_window": _get_env_int(
+                        "AUTOFORMAL_CROSS_INSP_PENALTY_WINDOW", 50
+                    ),
+                    "novelty_filter": {
+                        "enabled": bool(getattr(evo_cfg, "embedding_model", None)),
+                        "embedding_model": getattr(evo_cfg, "embedding_model", None),
+                        "openai_embed_base_url": os.environ.get("OPENAI_EMBED_BASE_URL", ""),
+                        "novelty_llm_base_url": os.environ.get("OPENAI_NOVELTY_LLM_BASE_URL", ""),
+                        "code_embed_sim_threshold": float(
+                            getattr(evo_cfg, "code_embed_sim_threshold", 1.0) or 1.0
+                        ),
+                        "max_novelty_attempts": int(
+                            getattr(evo_cfg, "max_novelty_attempts", 0) or 0
+                        ),
+                        "novelty_llm_models": list(
+                            getattr(evo_cfg, "novelty_llm_models", []) or []
+                        )
+                        if getattr(evo_cfg, "novelty_llm_models", None) is not None
+                        else None,
+                    },
+                    "repair_temperature": float(
+                        getattr(rep_cfg, "repair_temperature", 0.0) or 0.0
+                    ),
+                    "K_gen0": int(
+                        getattr(rep_cfg, "max_repair_attempts_gen0", 0) or 0
+                    ),
+                    "K_gen_ge_1": int(
+                        getattr(rep_cfg, "max_repair_attempts", 0) or 0
+                    ),
+                    "semantic_repair": {
+                        "enabled": bool(self.semantic_repair_enabled),
+                        "max_attempts": self.semantic_repair_max_attempts,
+                        "max_attempts_gen0": self.semantic_repair_max_attempts_gen0,
+                        "temperature": float(self.semantic_repair_temperature),
+                    },
+                },
+                "llm": {
+                    "llm_mode_requested": self.llm_mode_requested,
+                    "llm_mode_effective": self.llm_mode_effective,
+                    "llm_unavailable": int(bool(self.llm_unavailable)),
+                    "llm_unavailable_reason": self.llm_unavailable_reason,
+                    "openai_llm_base_url": os.environ.get("OPENAI_LLM_BASE_URL", ""),
+                    "llm_models": list(getattr(evo_cfg, "llm_models", []) or []),
+                    "patch_llm_enabled": int(bool(getattr(self, "patch_llm_enabled", False))),
+                    "patch_openai_llm_base_url": patch_llm.get("base_url", ""),
+                    "patch_llm_models": list(patch_llm.get("model_names", []) or []),
+                    "repair_openai_llm_base_url": repair_llm.get("base_url", ""),
+                    "repair_llm_models": list(repair_llm.get("model_names", []) or []),
+                    "no_llm": bool(
+                        str(self.problem_config.get("no_llm", "")).strip().lower()
+                        in {"1", "true", "yes", "y", "on"}
+                    ),
+                },
+                "problem_config_preview": {
+                    "informal_preview": (self.problem_config.get("informal", "") or "")[
+                        :200
+                    ],
+                    "use_beq": bool(self.problem_config.get("use_beq", False)),
+                    "use_semantic": bool(self.problem_config.get("use_semantic", False)),
+                    "use_cycle_consistency": bool(
+                        self.problem_config.get("use_cycle_consistency", True)
+                    ),
+                    "cycle_api_base_url": self.problem_config.get("cycle_api_base_url"),
+                    "cycle_model_name": self.problem_config.get("cycle_model_name"),
+                    "lean_server_url": self.problem_config.get("lean_server_url"),
+                },
+            }
+            out = Path(self.results_dir) / "run_config.json"
+            out.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            return
+    def _load_problem_config(self) -> Dict[str, Any]:
+        """
+        从文件加载问题配置。
+
+        【为什么从文件加载？】
+        problem_config.json 由 run_evo.py 在启动时创建，包含：
+        - informal: 自然语言数学陈述
+        - header: Lean4 的 import/open 语句
+        - ground_truth: 标准答案（用于 BEq+）
+        - use_beq: 是否启用 BEq+ 检查
+
+        这种设计允许 run_evo.py 和 AutoformalizationRunner 解耦，
+        配置变更不需要修改代码。
+        """
+        candidate_paths = [
+            Path(str(self.results_dir)) / "problem_config.json",
+            Path(__file__).parent / "problem_config.json",  # legacy fallback
+        ]
+        for config_path in candidate_paths:
+            if config_path.exists():
+                with open(config_path) as f:
+                    cfg = json.load(f)
+                if self.verbose:
+                    logger.info(f"[Config] Loaded problem config from: {config_path}")
+                return cfg
+        # 默认配置（用于测试或缺少配置文件时）
+        return {
+            "informal": "",
+            "header": "import Mathlib",
+            "ground_truth": "",
+            "use_beq": False,
+        }
+
+    def generate_initial_program(self):
+        """
+        Generate initial program with LLM, with Kimina adapter support.
+
+        【重写原因】
+        Kimina-Autoformalizer 模型需要简单 prompt 才能正常工作：
+        - 通用 prompt 太复杂，模型可能复读示例或输出错误格式
+        - 使用 KiminaAdapter 生成简单 prompt 效果更好
+
+        Returns:
+            (initial_code, patch_name, patch_description, api_costs) 元组
+        """
+        import re
+
+        llm_kwargs = self.llm.get_kwargs()
+        # SPEC v1.0: Initial 阶段 temperature=0.5（repair=0.0 另行设置；evolution=0.7 由 llm_kwargs 默认提供）
+        llm_kwargs["temperature"] = 0.5
+        model_name = self.evo_config.llm_models[0] if self.evo_config.llm_models else ""
+        adapter = get_model_adapter(model_name)
+        total_costs = 0.0
+
+        # 获取问题信息
+        informal = self.problem_config.get("informal", "")
+        header = self.problem_config.get("header", "import Mathlib")
+
+        # 根据模型类型选择 prompt
+        if adapter and is_kimina_model(model_name):
+            # Kimina 模型使用简单 prompt
+            sys_msg, user_msg = adapter.build_prompt(informal, header)
+            logger.info(f"[Gen0] Using Kimina adapter for model: {model_name}")
+        else:
+            # 通用模型使用原始 prompt
+            sys_msg, user_msg = self.prompt_sampler.initial_program_prompt()
+
+        msg_history = []
+
+        for attempt in range(self.evo_config.max_patch_attempts):
+            budget_reason = self._check_budget_exhausted()
+            if budget_reason is not None:
+                self.termination_reason = budget_reason
+                raise RuntimeError(f"Budget exhausted during Gen0 generation: {budget_reason}")
+
+            response = self.llm.query(
+                msg=user_msg,
+                system_msg=sys_msg,
+                llm_kwargs=llm_kwargs,
+                msg_history=msg_history,
+            )
+            if response is None or response.content is None:
+                budget_reason = self._check_budget_exhausted()
+                if budget_reason is not None:
+                    self.termination_reason = budget_reason
+                    raise RuntimeError(f"Budget exhausted during Gen0 generation: {budget_reason}")
+                if self.verbose:
+                    logger.info(
+                        f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
+                        f"{self.evo_config.max_patch_attempts} "
+                        "FAILURE. Error: LLM response content was None."
+                    )
+                if attempt < self.evo_config.max_patch_attempts - 1:
+                    user_msg = (
+                        "The previous response was empty. Please try again "
+                        "and provide the full code."
+                    )
+                    if response and response.new_msg_history:
+                        msg_history = response.new_msg_history
+                    continue
+                else:
+                    break
+
+            total_costs += response.cost or 0
+
+            # 使用 adapter 解析输出（如果可用）
+            initial_code = None
+            if adapter:
+                initial_code = adapter.parse_output(response.content)
+
+            # 回退：尝试标准提取
+            if not initial_code:
+                initial_code = extract_between(
+                    response.content,
+                    f"```{self.evo_config.language}",
+                    "```",
+                    False,
+                )
+
+            # 回退：直接从响应中提取声明
+            if not initial_code and self.evo_config.language == "lean":
+                # Extract a full Lean file (imports + theorem) from the raw model output.
+                cand = normalize_lean_code(response.content or "")
+                if cand and normalize_lean_statement(cand):
+                    initial_code = cand
+
+            if initial_code:
+                # 硬过滤：禁止 trivial/tautological placeholder 作为初始解
+                if self.evo_config.language == "lean" and is_trivial_tautology_placeholder(initial_code):
+                    if self.verbose:
+                        logger.info(
+                            f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
+                            f"{self.evo_config.max_patch_attempts} REJECTED. "
+                            "Reason: trivial/tautological placeholder."
+                        )
+                    if attempt < self.evo_config.max_patch_attempts - 1:
+                        user_msg = (
+                            "The previous response produced a trivial placeholder theorem. "
+                            "This is NOT allowed. Provide a non-trivial Lean 4 theorem statement that "
+                            "formalizes the claim."
+                        )
+                        if response and response.new_msg_history:
+                            msg_history = response.new_msg_history
+                        continue
+                    break
+
+                patch_name = extract_between(
+                    response.content, "<NAME>", "</NAME>", False
+                ) or "initial_program"
+                patch_description = extract_between(
+                    response.content, "<DESCRIPTION>", "</DESCRIPTION>", False
+                ) or "Initial program generated by LLM."
+
+                comment_char = "--" if self.evo_config.language == "lean" else "#"
+
+                initial_code = (
+                    f"{comment_char} EVOLVE-BLOCK-START\n"
+                    f"{initial_code}\n"
+                    f"{comment_char} EVOLVE-BLOCK-END\n"
+                )
+                if self.verbose:
+                    logger.info(
+                        f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
+                        f"{self.evo_config.max_patch_attempts} SUCCESS."
+                    )
+                return initial_code, patch_name, patch_description, total_costs
+
+            # 提取失败，重试
+            if self.verbose:
+                logger.info(
+                    f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
+                    f"{self.evo_config.max_patch_attempts} "
+                    "FAILURE. Error: Could not extract code from response."
+                )
+            if attempt < self.evo_config.max_patch_attempts - 1:
+                user_msg = (
+                    "The previous response did not contain valid code. "
+                    "Please provide the Lean 4 theorem statement directly."
+                )
+                if response and response.new_msg_history:
+                    msg_history = response.new_msg_history
+
+        raise RuntimeError(
+            "Failed to generate a valid initial program (non-empty, non-`True` placeholder)."
+        )
+
+    def _maybe_apply_staged_patch_schedule(self) -> None:
+        """
+        Dynamically override patch types/probabilities based on *budget calls used*.
+
+        This enables experiment scripts to do:
+        - Stage 1 (early): full/diff (better compile yield)
+        - Stage 2 (late): cross (inject cross-problem few-shots / inspirations)
+
+        Controlled by env vars:
+        - AUTOFORMAL_STAGED_BUDGET=1
+        - AUTOFORMAL_STAGE1_CALLS=<int>
+        - AUTOFORMAL_STAGE1_PATCH_TYPES="full,diff"
+        - AUTOFORMAL_STAGE1_PATCH_TYPE_PROBS="0.5,0.5"
+        - AUTOFORMAL_STAGE2_PATCH_TYPES="cross"
+        - AUTOFORMAL_STAGE2_PATCH_TYPE_PROBS="1.0"
+        """
+        if not _env_truthy("AUTOFORMAL_STAGED_BUDGET", default=False):
+            return
+
+        stage1_calls = int(_env_int("AUTOFORMAL_STAGE1_CALLS") or 0)
+        if stage1_calls <= 0:
+            return
+
+        stage1_types_raw = str(os.environ.get("AUTOFORMAL_STAGE1_PATCH_TYPES", "") or "").strip()
+        stage1_probs_raw = str(os.environ.get("AUTOFORMAL_STAGE1_PATCH_TYPE_PROBS", "") or "").strip()
+        stage2_types_raw = str(os.environ.get("AUTOFORMAL_STAGE2_PATCH_TYPES", "") or "").strip()
+        stage2_probs_raw = str(os.environ.get("AUTOFORMAL_STAGE2_PATCH_TYPE_PROBS", "") or "").strip()
+
+        raw_llm_api_calls = int(getattr(self.llm, "total_calls", 0) or 0)
+        budget_calls = raw_llm_api_calls + int(self.seedbank_debited_calls or 0)
+
+        stage = 1 if budget_calls < stage1_calls else 2
+        types_raw = stage1_types_raw if stage == 1 else stage2_types_raw
+        probs_raw = stage1_probs_raw if stage == 1 else stage2_probs_raw
+
+        patch_types = [t.strip() for t in types_raw.split(",") if t.strip()]
+        if not patch_types:
+            return
+
+        probs: list[float] = []
+        if probs_raw:
+            try:
+                probs = [float(x.strip()) for x in probs_raw.split(",") if x.strip()]
+            except Exception:
+                probs = []
+        if probs and len(probs) != len(patch_types):
+            logger.warning(
+                "[StagedPatch] Ignoring probs due to length mismatch: "
+                f"types={patch_types}, probs_raw={probs_raw!r}"
+            )
+            probs = []
+        if not probs:
+            probs = [1.0 / float(len(patch_types))] * len(patch_types)
+        else:
+            probs = [max(0.0, float(p)) for p in probs]
+            s = float(sum(probs))
+            probs = [p / s for p in probs] if s > 0 else [1.0 / float(len(patch_types))] * len(patch_types)
+
+        prev_stage = getattr(self, "_staged_patch_stage", None)
+        prev_types = list(getattr(self.prompt_sampler, "patch_types", []) or [])
+        if prev_stage != stage or prev_types != patch_types:
+            setattr(self, "_staged_patch_stage", stage)
+            self.prompt_sampler.patch_types = patch_types
+            self.prompt_sampler.patch_type_probs = probs
+            logger.info(
+                f"[StagedPatch] stage={stage} budget_calls={budget_calls} "
+                f"patch_types={patch_types} patch_type_probs={probs}"
+            )
+
+    def run_patch(
+        self,
+        parent_program: Program,
+        archive_programs: List[Program],
+        top_k_programs: List[Program],
+        generation: int,
+        novelty_attempt: int = 1,
+        resample_attempt: int = 1,
+    ) -> tuple[Optional[str], dict, int]:
+        """
+        Override: hard-reject trivial placeholder `: True := ...` *before* evaluation.
+
+        Why here?
+        - If `: True := by sorry` enters DB/archive, it can be sampled as parent/inspiration
+          and quickly collapses the search to trivial descendants.
+        - Rejecting at patch time prevents wasting evals and prevents on-disk `main.lean`
+          from ending up as placeholder for a generation.
+        """
+        from shinka.edit import apply_diff_patch, apply_full_patch, summarize_diff
+
+        max_patch_attempts = self.evo_config.max_patch_attempts
+        if self.verbose:
+            logger.info(
+                f"Edit Cycle {generation} -> {generation + 1}, "
+                f"Max Patch Attempts: {max_patch_attempts}"
+            )
+
+        # Ensure the output file always exists with a non-placeholder baseline.
+        exec_path = Path(self.results_dir) / f"{FOLDER_PREFIX}_{generation}" / f"main.{self.lang_ext}"
+        try:
+            exec_path.parent.mkdir(parents=True, exist_ok=True)
+            exec_path.write_text(parent_program.code or "", encoding="utf-8")
+        except Exception:
+            pass
+
+        # Get current meta recommendations
+        meta_recs, _, _ = self.meta_summarizer.get_current()
+
+        # Optional: staged patch schedule (budget-based).
+        self._maybe_apply_staged_patch_schedule()
+
+        patch_sys, patch_msg, patch_type = self.prompt_sampler.sample(
+            parent=parent_program,
+            archive_inspirations=archive_programs,
+            top_k_inspirations=top_k_programs,
+            meta_recommendations=meta_recs,
+        )
+
+        cross_inspiration_ids = getattr(self.prompt_sampler, "_last_cross_inspiration_ids", [])
+
+        if patch_type in ["full", "cross"] or (
+            patch_type == "diff" and self.evo_config.language == "lean"
+        ):
+            apply_patch = apply_full_patch
+        elif patch_type == "diff":
+            apply_patch = apply_diff_patch
+        elif patch_type == "paper":
+            raise NotImplementedError("Paper edit not implemented.")
+        else:
+            raise ValueError(f"Invalid patch type: {patch_type}")
+
+        total_costs = 0.0
+        msg_history = []
+        patch_client = getattr(self, "patch_llm", None) or self.llm
+        llm_kwargs = patch_client.get_kwargs()
+        if self.llm_selection is not None and patch_client is self.llm:
+            model_name = llm_kwargs["model_name"]
+            self.llm_selection.update_submitted(model_name)
+
+        code_diff: Optional[str] = None
+        num_applied_attempt = 0
+        error_attempt: Optional[str] = "Max attempts reached without successful patch."
+        patch_name: Optional[str] = None
+        patch_description: Optional[str] = None
+        output_path_attempt = None
+        patch_txt_attempt = None
+        patch_path = None
+        diff_summary: dict = {}
+        diff_local_stats = None
+        placeholder_rejections = 0
+        exact_duplicate_detected = False
+        exact_duplicate_target: str = ""
+        evolast_fallback_used = False
+        evolast_fallback_reason: str = ""
+        evolast_fallback_mode: str = ""
+        evolast_fallback_info: dict = {}
+        response = None
+
+        for patch_attempt in range(max_patch_attempts):
+            budget_reason = self._check_budget_exhausted()
+            if budget_reason is not None:
+                self.termination_reason = budget_reason
+                error_attempt = budget_reason
+                break
+
+            response = patch_client.query(
+                msg=patch_msg,
+                system_msg=patch_sys,
+                msg_history=msg_history,
+                llm_kwargs=llm_kwargs,
+            )
+            if response is None or response.content is None:
+                budget_reason = self._check_budget_exhausted()
+                if budget_reason is not None:
+                    self.termination_reason = budget_reason
+                    error_attempt = budget_reason
+                    break
+                if self.verbose:
+                    logger.info(
+                        f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} FAILURE. "
+                        "Error: LLM response content was None."
+                    )
+                error_attempt = "LLM response content was None."
+                num_applied_attempt = 0
+                patch_txt_attempt = None
+                if patch_attempt < max_patch_attempts - 1:
+                    patch_msg = (
+                        "The previous attempt to get an edit was not successful because the "
+                        "LLM response was empty.\n\n"
+                        "Try again and follow the EXACT output protocol:\n"
+                        "- Output a COMPLETE Lean 4 file inside a ```lean code fence (full file, not a diff).\n"
+                        "- The file MUST start with these two lines (in this order):\n"
+                        "  import Mathlib\n"
+                        "  import Aesop\n"
+                        "- Do NOT include any comments.\n"
+                        "- Include EXACTLY ONE `theorem` declaration.\n"
+                        "- The theorem MUST end with `:= by sorry`.\n"
+                    )
+                    if response:
+                        msg_history = response.new_msg_history
+                    continue
+                break
+
+            total_costs += float(response.cost or 0.0)
+            patch_name = extract_between(response.content, "<NAME>", "</NAME>", False)
+            patch_description = extract_between(
+                response.content, "<DESCRIPTION>", "</DESCRIPTION>", False
+            )
+
+            (
+                updated_code_attempt,
+                num_applied_attempt,
+                output_path_attempt,
+                error_attempt,
+                patch_txt_attempt,
+                patch_path,
+            ) = apply_patch(
+                original_str=parent_program.code,
+                patch_str=response.content,
+                patch_dir=f"{self.results_dir}/{FOLDER_PREFIX}_{generation}",
+                language=self.evo_config.language,
+                verbose=False,
+            )
+
+            # Success: patch applied, but we may still hard-reject placeholders.
+            if error_attempt is None and num_applied_attempt > 0 and updated_code_attempt is not None:
+                # Policy: if the patch model outputs NO explicit header/preamble, inherit from parent.
+                if self.evo_config.language == "lean":
+                    rebased, did_rebase, _reason = rebase_lean_candidate_on_parent_preamble_if_missing(
+                        candidate_code=updated_code_attempt,
+                        parent_code=parent_program.code or "",
+                    )
+                    if did_rebase and rebased.strip() and rebased.strip() != (updated_code_attempt or "").strip():
+                        updated_code_attempt = rebased
+                        try:
+                            exec_path.write_text(rebased, encoding="utf-8")
+                        except Exception:
+                            pass
+                        # IMPORTANT: `apply_full_patch` already wrote `edit.diff`, but after
+                        # we rebase the candidate, `main.lean` no longer matches that diff.
+                        # Overwrite `edit.diff` so audits reflect the FINAL evaluated file.
+                        if patch_path:
+                            patch_txt_attempt = overwrite_edit_diff_for_final_candidate(
+                                patch_path=Path(patch_path),
+                                original_code=parent_program.code or "",
+                                final_code=rebased,
+                                lang_ext=self.lang_ext,
+                            ) or patch_txt_attempt
+
+                if self.evo_config.language == "lean" and is_trivial_tautology_placeholder(updated_code_attempt):
+                    placeholder_rejections += 1
+                    error_attempt = "Rejected trivial placeholder: tautology-like statement."
+                    if self.verbose:
+                        logger.info(
+                            f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} REJECTED. "
+                            "Reason: trivial/tautological statement."
+                        )
+                    # Restore non-placeholder baseline so we never submit/eval placeholder code.
+                    try:
+                        exec_path.write_text(parent_program.code or "", encoding="utf-8")
+                    except Exception:
+                        pass
+                    # Ask the model to try again (same parent/inspirations).
+                    patch_msg = (
+                        "The previous output is INVALID because it produced a trivial placeholder theorem. "
+                        "This is forbidden.\n\n"
+                        "Try again and follow the EXACT output protocol:\n"
+                        "- Output a COMPLETE Lean 4 file inside a ```lean code fence (full file, not a diff).\n"
+                        "- The file MUST start with these two lines (in this order):\n"
+                        "  import Mathlib\n"
+                        "  import Aesop\n"
+                        "- Do NOT include any comments.\n"
+                        "- Include EXACTLY ONE `theorem` declaration.\n"
+                        "- The theorem MUST be non-trivial (NOT `: True := by sorry`).\n"
+                        "- The theorem MUST end with `:= by sorry`.\n"
+                    )
+                    msg_history = response.new_msg_history
+                    code_diff = None
+                    num_applied_attempt = 0
+                    continue
+
+                # Enforce theorem-only protocol (GTED tooling assumes theorem).
+                if self.evo_config.language == "lean" and not _is_theorem_statement(updated_code_attempt):
+                    error_attempt = "Rejected output protocol: statement must start with `theorem`."
+                    if self.verbose:
+                        logger.info(
+                            f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} REJECTED. "
+                            "Reason: statement did not start with `theorem`."
+                        )
+                    try:
+                        exec_path.write_text(parent_program.code or "", encoding="utf-8")
+                    except Exception:
+                        pass
+                    patch_msg = (
+                        "The previous output is INVALID because it did not contain a `theorem` declaration.\n\n"
+                        "Try again and follow the EXACT output protocol:\n"
+                        "- Output a COMPLETE Lean 4 file inside a ```lean code fence (full file, not a diff).\n"
+                        "- The file MUST start with these two lines (in this order):\n"
+                        "  import Mathlib\n"
+                        "  import Aesop\n"
+                        "- Do NOT include any comments.\n"
+                        "- Include EXACTLY ONE `theorem` declaration (do NOT use lemma/def/example).\n"
+                        "- The theorem MUST end with `:= by sorry`.\n"
+                    )
+                    msg_history = response.new_msg_history
+                    code_diff = None
+                    num_applied_attempt = 0
+                    continue
+
+                # Detect exact duplicates of parent/cross inspirations (Lean only).
+                #
+                # IMPORTANT (fairness):
+                # We do NOT resample here, because rejection sampling changes the generator-call
+                # distribution. Instead we record the duplication and rely on archive-level
+                # deduplication to prevent duplicates from occupying archive slots.
+                if self.evo_config.language == "lean":
+                    cand_key = _canonicalize_lean_for_exact_match(updated_code_attempt)
+                    parent_key = _canonicalize_lean_for_exact_match(parent_program.code or "")
+                    if cand_key and parent_key and cand_key == parent_key:
+                        exact_duplicate_detected = True
+                        exact_duplicate_target = "parent"
+                    elif patch_type == "cross" and cand_key:
+                        insp_by_id = {}
+                        for p in list(archive_programs or []) + list(top_k_programs or []):
+                            pid = getattr(p, "id", None)
+                            if pid:
+                                insp_by_id[pid] = p
+                        for pid in cross_inspiration_ids or []:
+                            prog = insp_by_id.get(pid)
+                            if not prog:
+                                continue
+                            insp_key = _canonicalize_lean_for_exact_match(getattr(prog, "code", "") or "")
+                            if insp_key and insp_key == cand_key:
+                                exact_duplicate_detected = True
+                                exact_duplicate_target = f"cross_inspiration:{pid}"
+                                break
+
+                    if exact_duplicate_detected and self.verbose:
+                        logger.info(
+                            f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} NOTE. "
+                            f"Exact duplicate detected ({exact_duplicate_target})."
+                        )
+
+                    # Optional: treat exact duplicates as "dead-ends" and apply EvolAST fallback on parent.
+                    if exact_duplicate_detected and self.enable_evolast_fallback:
+                        try:
+                            from evolast_lean import apply_evolast_to_lean_code, parse_rule_weights
+
+                            evolast_fallback_mode = (
+                                os.environ.get("AUTOFORMAL_EVOLAST_MODE", "").strip() or "safe"
+                            )
+                            evolast_p = 0.35
+                            evolast_max_rewrites = 32
+                            try:
+                                raw_p = str(os.environ.get("AUTOFORMAL_EVOLAST_P", "") or "").strip()
+                                if raw_p:
+                                    evolast_p = float(raw_p)
+                            except Exception:
+                                evolast_p = 0.35
+                            try:
+                                raw_m = str(os.environ.get("AUTOFORMAL_EVOLAST_MAX_REWRITES", "") or "").strip()
+                                if raw_m:
+                                    evolast_max_rewrites = int(raw_m)
+                            except Exception:
+                                evolast_max_rewrites = 32
+                            evolast_weights = parse_rule_weights(os.environ.get("AUTOFORMAL_EVOLAST_RULE_WEIGHTS"))
+                            fallback_code, info = apply_evolast_to_lean_code(
+                                parent_program.code or "",
+                                mode=evolast_fallback_mode,
+                                p=float(evolast_p),
+                                max_rewrites=int(evolast_max_rewrites),
+                                rule_weights=dict(evolast_weights),
+                            )
+                            fallback_code = str(fallback_code or "").strip()
+                            if fallback_code and fallback_code.strip() != (parent_program.code or "").strip():
+                                updated_code_attempt = fallback_code
+                                try:
+                                    exec_path.write_text(fallback_code, encoding="utf-8")
+                                except Exception:
+                                    pass
+                                # Overwrite `edit.diff` to reflect the FINAL EvolAST candidate.
+                                if patch_path:
+                                    patch_txt_attempt = overwrite_edit_diff_for_final_candidate(
+                                        patch_path=Path(patch_path),
+                                        original_code=parent_program.code or "",
+                                        final_code=fallback_code,
+                                        lang_ext=self.lang_ext,
+                                    ) or patch_txt_attempt
+                                evolast_fallback_used = True
+                                evolast_fallback_reason = f"llm_exact_duplicate_{exact_duplicate_target or 'parent'}"
+                                evolast_fallback_info = info if isinstance(info, dict) else {"info": str(info)}
+                                # Make the mutation visible in analysis/metrics as a separate patch type.
+                                patch_type = "evolast"
+                                patch_name = f"evolast_{evolast_fallback_mode}"
+                                patch_description = "EvolAST fallback on parent after exact-duplicate LLM patch."
+                        except Exception as e:
+                            if self.verbose:
+                                logger.info(
+                                    f"[EvolAST] Fallback skipped (error): {type(e).__name__}: {e}"
+                                )
+
+                # Accepted patch: compute diff summaries/stats for audit.
+                if patch_path:
+                    diff_summary = summarize_diff(str(patch_path))
+                if patch_type == "diff" and self.evo_config.language == "lean":
+                    diff_local_stats = _lean_local_diff_stats(parent_program.code, updated_code_attempt)
+                if self.verbose:
+                    logger.info(
+                        f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} SUCCESS. "
+                        f"Output: {output_path_attempt}, Patches Applied: {num_applied_attempt}."
+                    )
+                code_diff = patch_txt_attempt
+                break
+
+            # Failure: prepare retry prompt
+            error_str = str(error_attempt) if error_attempt else "No changes applied."
+            patch_msg = (
+                "The previous edit was not successful. This was the error message:\n\n"
+                + error_str
+                + "\n\n"
+                "Try again and follow the EXACT output protocol:\n"
+                "- Output a COMPLETE Lean 4 file inside a ```lean code fence (full file, not a diff).\n"
+                "- The file MUST start with these two lines (in this order):\n"
+                "  import Mathlib\n"
+                "  import Aesop\n"
+                "- Do NOT include any comments.\n"
+                "- Include EXACTLY ONE `theorem` declaration.\n"
+                "- The theorem MUST end with `:= by sorry`.\n"
+            )
+            if self.verbose:
+                logger.info(
+                    f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} FAILURE. "
+                    f"Error: '{error_str}', Patches Applied: {num_applied_attempt}."
+                )
+            msg_history = response.new_msg_history
+            code_diff = None
+
+        # Only consider the diff summary for the original source file
+        original_filename = f"original.{self.lang_ext}"
+        if original_filename in diff_summary:
+            diff_summary = diff_summary[original_filename]
+
+        meta_edit_data = {
+            "patch_type": patch_type,
+            "api_costs": total_costs,
+            "num_applied": num_applied_attempt,
+            "patch_name": patch_name,
+            "patch_description": patch_description,
+            "error_attempt": error_attempt,
+            "novelty_attempt": novelty_attempt,
+            "resample_attempt": resample_attempt,
+            "patch_attempt": patch_attempt + 1,
+            "placeholder_true_rejections": placeholder_rejections,
+            "exact_duplicate_detected": exact_duplicate_detected,
+            "exact_duplicate_target": exact_duplicate_target,
+            "evolast_fallback_used": int(bool(evolast_fallback_used)),
+            "evolast_fallback_reason": evolast_fallback_reason,
+            "evolast_fallback_mode": evolast_fallback_mode,
+            "evolast_fallback_info": evolast_fallback_info,
+            **llm_kwargs,
+            "llm_result": response.to_dict() if response else None,
+            "diff_summary": diff_summary,
+            "diff_local_stats": diff_local_stats,
+            "cross_inspiration_ids": cross_inspiration_ids if patch_type == "cross" else [],
+        }
+        if self.verbose and num_applied_attempt > 0:
+            self._print_metadata_table(meta_edit_data, generation)
+        return code_diff, meta_edit_data, num_applied_attempt
+
+    def _run_generation_0(self):
+        """
+        Run generation 0 with compile repair support.
+
+        Why override?
+        - Base EvolutionRunner always inserts gen_0 into DB regardless of compile_ok.
+        - For autoformalization we want: compile_ok=0 should NOT be treated as a valid parent.
+        - If gen_0 fails to compile, we immediately attempt repair (≤ max_repair_attempts).
+        """
+        initial_dir = Path(f"{self.results_dir}/{FOLDER_PREFIX}_0")
+        initial_dir.mkdir(parents=True, exist_ok=True)
+
+        min_num_init = int(getattr(self.repair_config, "num_init_candidates_gen0", 3))
+        logger.info(
+            f"[Gen0] Bootstrapping with at least {min_num_init} initial candidates "
+            "(continue sampling until a non-placeholder compile_ok=1 seed is found, "
+            "or until budget is exhausted)"
+        )
+
+        inserted_programs: List[Program] = []
+        best_score: Optional[float] = None
+
+        # NOTE: Some unit tests construct the runner via `__new__` and set only a
+        # minimal subset of fields. In those cases, `problem_config` may not exist.
+        problem_cfg = getattr(self, "problem_config", None)
+        if not isinstance(problem_cfg, dict):
+            problem_cfg = {}
+        init_programs_dir_raw = str(problem_cfg.get("init_programs_dir") or "").strip()
+        seed_bank_dir: Optional[Path] = None
+        if init_programs_dir_raw:
+            p = Path(init_programs_dir_raw).expanduser()
+            if (p / "seed_0").exists():
+                seed_bank_dir = p
+            elif (p / "gen_0" / "seed_0").exists():
+                seed_bank_dir = p / "gen_0"
+            else:
+                raise ValueError(
+                    "Invalid init_programs_dir: expected a directory containing `seed_0/` "
+                    "or a directory containing `gen_0/seed_0/`. "
+                    f"Got: {init_programs_dir_raw}"
+                )
+            logger.info(f"[Gen0] Reusing seed bank from: {seed_bank_dir}")
+        reuse_seedbank_eval = bool(seed_bank_dir is not None and _env_truthy("AUTOFORMAL_REUSE_INIT_EVAL", default=False))
+
+        def _load_seedbank_metrics(seed_i: int) -> Optional[dict]:
+            if seed_bank_dir is None:
+                return None
+            candidates = [
+                seed_bank_dir / f"seed_{seed_i}" / "results" / "metrics.json",
+                seed_bank_dir / f"seed_{seed_i}" / "metrics.json",
+            ]
+            for mp in candidates:
+                if not mp.exists():
+                    continue
+                try:
+                    return json.loads(mp.read_text(encoding="utf-8"))
+                except Exception as e:
+                    logger.warning(f"[Gen0] Failed to load seedbank metrics: {mp} ({type(e).__name__}: {e})")
+                    return None
+            return None
+
+        def _has_non_placeholder_seed(programs: List[Program]) -> bool:
+            for p in programs:
+                code = str(getattr(p, "code", "") or "")
+                if not code:
+                    continue
+                if self.evo_config.language == "lean" and is_trivial_tautology_placeholder(code):
+                    continue
+                return True
+            return False
+
+        i = 0
+        seed_bank_exhausted = False
+        while True:
+            # Keep the original behavior of attempting `min_num_init` seeds for
+            # diversity, but prevent Gen0 from hard-failing when none compiles.
+            if i >= min_num_init and _has_non_placeholder_seed(inserted_programs):
+                break
+
+            budget_reason = self._check_budget_exhausted()
+            if budget_reason is not None:
+                self.termination_reason = budget_reason
+                logger.info(
+                    f"[Gen0] Budget exhausted during bootstrapping at seed={i}: {budget_reason}"
+                )
+                break
+
+            seed_dir = initial_dir / f"seed_{i}"
+            seed_dir.mkdir(parents=True, exist_ok=True)
+            exec_fname = str(seed_dir / f"main.{self.lang_ext}")
+            results_dir = str(seed_dir / "results")
+            Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+            api_costs = 0.0
+            patch_name = f"initial_program_{i}"
+            patch_description = "Initial program."
+            patch_type = "init"
+
+            # Seed bank (recommended): reuse pre-generated gen0 solutions for ALL seeds.
+            #
+            # When `init_programs_dir` is set:
+            # - Gen0 does NOT call the LLM
+            # - Every seed_i/main.lean is copied from the seed bank
+            #
+            # Otherwise:
+            # - Seed 0 can reuse a provided initial program file; others are sampled with LLM.
+            #
+            # NOTE: `--init_program` is allowed to be a compile-safe placeholder (e.g. `: True := by sorry`)
+            # for bootstrapping. This avoids runs crashing when Kimina fails to produce any compile_ok=1
+            # seeds in Gen0. Once any other compile_ok=1 program enters the archive, the pruning logic
+            # (`delete_file_seed0`) will remove the file seed0 (including island copies).
+            use_seed_bank = seed_bank_dir is not None and (not seed_bank_exhausted)
+            use_init_file = (not use_seed_bank) and i == 0 and bool(self.evo_config.init_program_path)
+            init_seed_source = "seed_bank" if use_seed_bank else "file" if use_init_file else "llm"
+
+            if use_seed_bank:
+                assert seed_bank_dir is not None
+                src = seed_bank_dir / f"seed_{i}" / f"main.{self.lang_ext}"
+                if not src.exists():
+                    if i < min_num_init:
+                        raise FileNotFoundError(
+                            f"Seed bank is missing {src}. "
+                            "Make sure `--num_init_candidates_gen0` matches the number of available seeds, "
+                            "or provide a seed bank that contains `seed_i/main.lean` for every i."
+                        )
+                    seed_bank_exhausted = True
+                    # If Gen0 already has at least one non-placeholder compile_ok=1 seed, we can stop
+                    # cleanly here; otherwise, fall back to LLM sampling to avoid hard failure on a
+                    # low-quality seedbank slice (e.g. first-k seeds all compile_fail for a problem).
+                    if _has_non_placeholder_seed(inserted_programs):
+                        logger.warning(
+                            f"[Gen0] Seed bank exhausted at seed={i} (missing: {src}); stopping bootstrapping."
+                        )
+                        if self.termination_reason is None:
+                            self.termination_reason = f"gen0_seedbank_exhausted_at_seed_{i}"
+                        break
+
+                    logger.warning(
+                        f"[Gen0] Seed bank exhausted at seed={i} (missing: {src}) "
+                        "AND no compile_ok=1 seed found; falling back to LLM sampling."
+                    )
+                    # Retry the same `seed_i` with `use_seed_bank=False`.
+                    continue
+                shutil.copy(src, exec_fname)
+                patch_name = f"seedbank_seed_{i}"
+                patch_description = f"Initial program copied from seed bank: {src}"
+                # Optional: debit seedbank reuse toward the generation budget.
+                if self.seedbank_debit_calls and self.seedbank_calls_per_seed > 0:
+                    if i != 0 or self.seedbank_debit_seed0:
+                        self.seedbank_debited_calls += int(self.seedbank_calls_per_seed)
+            if use_init_file:
+                if self.verbose:
+                    logger.info(
+                        f"[Gen0] Seed 0 from file: {self.evo_config.init_program_path}"
+                    )
+                shutil.copy(self.evo_config.init_program_path, exec_fname)
+                patch_description = "Initial program from file."
+
+            if (not use_seed_bank) and (not use_init_file):
+                if self.verbose:
+                    logger.info(f"[Gen0] Generating seed {i} with LLM...")
+                try:
+                    initial_code, patch_name, patch_description, api_costs = (
+                        self.generate_initial_program()
+                    )
+                    with open(exec_fname, "w", encoding="utf-8") as f:
+                        f.write(initial_code)
+                except Exception as e:
+                    logger.warning(f"[Gen0] Failed to generate seed {i}: {e}")
+                    self._add_to_failure_buffer(
+                        program_id=str(uuid.uuid4()),
+                        generation=0,
+                        compile_error_type="gen0_generation_failed",
+                        compile_error_msg=str(e),
+                        statement="",
+                        repair_attempts=0,
+                        repair_llm_calls_used=0,
+                        final_status="generation_failed",
+                    )
+                    i += 1
+                    continue
+
+            results = None
+            rtime = 0.0
+            if use_seed_bank and reuse_seedbank_eval:
+                metrics_loaded = _load_seedbank_metrics(i)
+                if metrics_loaded is not None:
+                    # Mirror evaluator outputs for auditing/analysis scripts.
+                    try:
+                        Path(results_dir, "metrics.json").write_text(
+                            json.dumps(metrics_loaded, indent=2, ensure_ascii=False),
+                            encoding="utf-8",
+                        )
+                        Path(results_dir, "correct.json").write_text(
+                            json.dumps({"correct": bool(int(metrics_loaded.get("compile_ok", 0) or 0) == 1)}, indent=2),
+                            encoding="utf-8",
+                        )
+                    except Exception as e:
+                        logger.warning(f"[Gen0] Failed to write replayed metrics to results_dir: {e}")
+                    results = {"metrics": metrics_loaded, "stdout_log": "", "stderr_log": ""}
+                else:
+                    logger.warning(
+                        f"[Gen0] AUTOFORMAL_REUSE_INIT_EVAL=1 but metrics not found for seed={i}; falling back to evaluation."
+                    )
+
+            if results is None:
+                # Evaluate synchronously
+                results, rtime = self.scheduler.run(exec_fname, results_dir)
+
+            metrics_val = results.get("metrics", {}) if results else {}
+            compile_ok = metrics_val.get("compile_ok", 0)
+            compile_error_type = metrics_val.get("compile_error_type", "")
+            compile_error_msg = metrics_val.get("compile_error_msg", "")
+            statement = metrics_val.get("statement", "")
+
+            # Read evaluated code for DB insertion (if compile_ok=1)
+            try:
+                evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"Could not read code for job {exec_fname}. Error: {e}")
+                evaluated_code = ""
+
+            if compile_ok == 0:
+                logger.warning(
+                    f"[Gen0 Repair] seed={i} compile_ok=0, error_type={compile_error_type}"
+                )
+                if not self.repair_config.enabled:
+                    self._add_to_failure_buffer(
+                        program_id=str(uuid.uuid4()),
+                        generation=0,
+                        compile_error_type=compile_error_type,
+                        compile_error_msg=compile_error_msg,
+                        statement=statement,
+                        repair_attempts=0,
+                        repair_llm_calls_used=0,
+                        final_status="no_repair",
+                    )
+                    i += 1
+                    continue
+
+                # Optional: skip compile repair for seedbank seeds.
+                #
+                # Motivation: seedbanks are typically built from already-evaluated candidates; if a seedbank
+                # entry is compile_fail, spending extra repair calls in Gen0 can burn a large fraction of the
+                # budget before evolution even starts.
+                if init_seed_source == "seed_bank" and _env_truthy(
+                    "AUTOFORMAL_SKIP_SEEDBANK_GEN0_REPAIR", default=False
+                ):
+                    self._add_to_failure_buffer(
+                        program_id=str(uuid.uuid4()),
+                        generation=0,
+                        compile_error_type=compile_error_type,
+                        compile_error_msg=compile_error_msg,
+                        statement=statement,
+                        repair_attempts=0,
+                        repair_llm_calls_used=0,
+                        final_status="seedbank_skip_repair",
+                    )
+                    i += 1
+                    continue
+
+                dummy_job = RunningJob(
+                    job_id=f"gen0_seed_{i}",
+                    exec_fname=exec_fname,
+                    results_dir=results_dir,
+                    start_time=time.time(),
+                    generation=0,
+                    parent_id=None,
+                    archive_insp_ids=[],
+                    top_k_insp_ids=[],
+                    code_diff=None,
+                    meta_patch_data={
+                        "patch_type": patch_type,
+                        "patch_name": patch_name,
+                        "patch_description": patch_description,
+                        "init_seed_source": init_seed_source,
+                        "init_seed_index": int(i),
+                        "init_seed_bank_path": str(seed_bank_dir)
+                        if (init_seed_source == "seed_bank" and seed_bank_dir is not None)
+                        else None,
+                    },
+                )
+                repair_item = RepairQueueItem(
+                    program_id=str(uuid.uuid4()),
+                    exec_fname=exec_fname,
+                    results_dir=results_dir,
+                    generation=0,
+                    parent_id=None,
+                    compile_error_type=compile_error_type,
+                    compile_error_msg=compile_error_msg,
+                    original_code=str(metrics_val.get("code") or evaluated_code or statement or ""),
+                    repair_attempts=0,
+                )
+                repaired_program = self._process_repair(repair_item, dummy_job)
+                if repaired_program is not None:
+                    inserted_programs.append(repaired_program)
+                    best_score = (
+                        repaired_program.combined_score
+                        if best_score is None
+                        else max(best_score, repaired_program.combined_score or 0.0)
+                    )
+                i += 1
+                continue
+
+            # compile_ok=1, but reject trivial placeholders from seed banks.
+            # Rationale: seed banks are meant to provide *real* initial solutions, and allowing
+            # `theorem ... : True := by sorry` to enter the archive can collapse the search
+            # when semantic/cycle are disabled or unavailable.
+            if (
+                init_seed_source == "seed_bank"
+                and self.evo_config.language == "lean"
+                and is_trivial_tautology_placeholder(evaluated_code)
+            ):
+                logger.info(f"[Gen0] Skipping seed_bank placeholder seed={i}")
+                self._add_to_failure_buffer(
+                    program_id=str(uuid.uuid4()),
+                    generation=0,
+                    compile_error_type="seedbank_placeholder",
+                    compile_error_msg="Rejected trivial placeholder from seed bank.",
+                    statement=normalize_lean_statement(evaluated_code) or "",
+                    repair_attempts=0,
+                    repair_llm_calls_used=0,
+                    final_status="seedbank_placeholder_skipped",
+                )
+                i += 1
+                continue
+
+            # compile_ok=1: insert into DB as a gen0 seed
+            code_embedding, e_cost = self.get_code_embedding(exec_fname)
+            combined_score = metrics_val.get("combined_score", 0.0)
+            public_metrics = metrics_val.get("public", {})
+            private_metrics = metrics_val.get("private", {})
+            text_feedback = metrics_val.get("text_feedback", "")
+            stdout_log = results.get("stdout_log", "") if results else ""
+            stderr_log = results.get("stderr_log", "") if results else ""
+
+            db_program = Program(
+                id=str(uuid.uuid4()),
+                code=evaluated_code,
+                language=self.evo_config.language,
+                parent_id=None,
+                generation=0,
+                archive_inspiration_ids=[],
+                top_k_inspiration_ids=[],
+                code_diff=None,
+                embedding=code_embedding,
+                correct=True,  # correct ≡ compile_ok for autoformalization
+                combined_score=combined_score,
+                public_metrics=public_metrics,
+                private_metrics=private_metrics,
+                text_feedback=text_feedback,
+                metadata={
+                    "compute_time": rtime,
+                    "api_costs": api_costs,
+                    "embed_cost": e_cost,
+                    "novelty_cost": 0.0,
+                    "patch_type": patch_type,
+                    "patch_name": patch_name,
+                    "patch_description": patch_description,
+                    "init_seed_source": init_seed_source,
+                    "init_seed_index": int(i),
+                    "init_seed_bank_path": str(seed_bank_dir)
+                    if (init_seed_source == "seed_bank" and seed_bank_dir is not None)
+                    else None,
+                    "stdout_log": stdout_log,
+                    "stderr_log": stderr_log,
+                    "fitness_tuple": list(
+                        # fitness_tuple order: (compile_ok, beq_ok, semantic_ok, cycle_score)
+                        metrics_val.get("fitness_tuple", (1, 0, 0, 0.0))
+                    ),
+                    "cycle_log_prob": metrics_val.get("cycle_log_prob", None),
+                    "cycle_normalized_log_prob": metrics_val.get(
+                        "cycle_normalized_log_prob", None
+                    ),
+                    "cycle_score": metrics_val.get("cycle_score", None),
+                },
+            )
+
+            self.db.add(db_program, verbose=True)
+            inserted_programs.append(db_program)
+            best_score = (
+                combined_score
+                if best_score is None
+                else max(best_score, combined_score or 0.0)
+            )
+            self.meta_summarizer.add_evaluated_program(db_program)
+            i += 1
+
+        if not inserted_programs:
+            if self.termination_reason is None:
+                self.termination_reason = (
+                    f"gen0_no_compile_ok_seed_after_{min_num_init}_attempts"
+                )
+            logger.warning(
+                f"[Gen0] No compile_ok=1 seeds found (attempts={i}, repair enabled={self.repair_config.enabled}); "
+                "stopping before submitting Gen>=1 jobs."
+            )
+            self.db.save()
+            return
+
+        # Initialize bandit baseline from the best gen0 seed.
+        if self.llm_selection is not None and best_score is not None:
+            self.llm_selection.set_baseline_score(best_score)
+
+        self.db.save()
+        self._update_best_solution()
+        logger.info(f"[Gen0] Bootstrapped {len(inserted_programs)} compile_ok=1 seeds")
+
+        # 如果 seed0 来自文件（常为占位符），且 Gen0 已经有其它 compile_ok=1 seed，
+        # 则立即剔除 file seed0，避免它在 Gen>=1 的 parent/inspiration 采样中占据优势。
+        if not self._file_seed0_pruned:
+            has_non_file_seed = any(
+                str((p.metadata or {}).get("init_seed_source", "")).strip().lower()
+                in {"llm", "seed_bank"}
+                for p in inserted_programs
+            )
+            if has_non_file_seed:
+                delete_fn = getattr(self.db, "delete_file_seed0", None)
+                deleted_count = int(delete_fn()) if callable(delete_fn) else 0
+                if deleted_count > 0:
+                    logger.info(
+                        f"[Prune] Removed {deleted_count} file seed0 program(s) from archive/DB "
+                        "after Gen0 bootstrapping"
+                    )
+                self._file_seed0_pruned = True
+
+    def _update_best_solution(self):
+        """
+        Override: 更智能地更新 best 目录。
+
+        处理两种目录结构：
+        - Gen 0: gen_0/seed_X/main.lean (多个 seed)
+        - Gen 1+: gen_N/main.lean (单个文件)
+
+        通过匹配文件内容来确定正确的源文件。
+        注意：Gen0 可能通过 repair 生成 `main_repairK.lean`，最佳解也可能来自该文件，
+        因此需要在 seed 目录下扫描 `main*.lean` 而不只是 `main.lean`。
+        """
+        best_programs = self.db.get_top_programs(n=1, correct_only=True)
+        if not best_programs:
+            if self.verbose:
+                logger.debug(
+                    "No correct programs found yet, cannot determine best solution."
+                )
+            return
+
+        best_program = best_programs[0]
+
+        if best_program.id == self.best_program_id:
+            return  # No change
+
+        self.best_program_id = best_program.id
+
+        # 查找源文件路径
+        gen_dir = Path(self.results_dir) / f"gen_{best_program.generation}"
+        source_path = None
+        matched_main_file = None
+
+        if best_program.generation == 0:
+            # Gen 0: 需要在 seed 目录中查找匹配的文件
+            for seed_dir in sorted(gen_dir.glob("seed_*")):
+                for candidate in sorted(seed_dir.glob(f"main*.{self.lang_ext}")):
+                    if not candidate.exists():
+                        continue
+                    content = candidate.read_text(encoding="utf-8")
+                    # 比较代码内容（忽略空白差异）
+                    if content.strip() == best_program.code.strip():
+                        source_path = seed_dir
+                        matched_main_file = candidate
+                        break
+                if source_path is not None:
+                    break
+            if source_path is None:
+                logger.warning(
+                    f"[Best] Could not find matching seed for best program "
+                    f"{best_program.id[:8]} in gen_0"
+                )
+                return
+        else:
+            # Gen 1+: 直接使用 gen_N 目录
+            source_path = gen_dir
+
+        if not source_path.exists():
+            logger.warning(
+                f"[Best] Source directory does not exist: {source_path}"
+            )
+            return
+
+        best_dir = Path(self.results_dir) / "best"
+
+        if best_dir.exists():
+            shutil.rmtree(best_dir)
+
+        shutil.copytree(source_path, best_dir)
+
+        # If Gen0 best came from a repaired file (e.g. main_repairK.lean),
+        # ensure best/main.lean matches the actual best program code.
+        if best_program.generation == 0 and matched_main_file is not None:
+            best_main = best_dir / f"main.{self.lang_ext}"
+            try:
+                best_main.write_text(
+                    matched_main_file.read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+            except Exception:
+                logger.exception(
+                    f"[Best] Failed to overwrite {best_main} from {matched_main_file}"
+                )
+
+        if self.verbose:
+            logger.info(
+                f"New best program found: gen {best_program.generation}, "
+                f"id {best_program.id[:6]}... "
+                f"Copied from {source_path.name} to {best_dir}"
+            )
+
+    def _process_completed_job(self, job: RunningJob):
+        """
+        处理评估完成的任务。
+
+        ================================================================================
+                    这是整个 repair 逻辑的核心入口
+        ================================================================================
+
+        【执行流程】
+        1. 获取评估结果（metrics）
+        2. 检查 compile_ok:
+           - compile_ok = 1 → 存入 archive（正常流程）
+           - compile_ok = 0 → 进入 repair 流程
+        3. Repair 流程:
+           - 如果 repair 启用 → 尝试修复
+           - 如果 repair 禁用 → 直接记录到 failure_buffer
+
+        【约束实现】
+        - [A] compile_ok=0 的候选跳过 novelty（不调用父类的 novelty 检查）
+        - [B] compile_ok=0 的候选不入 archive（不调用 db.add）
+        """
+        end_time = time.time()
+        rtime = end_time - job.start_time
+
+        # 获取评估结果
+        results = self.scheduler.get_job_results(job.job_id, job.results_dir)
+
+        # 读取候选代码
+        file_exists = Path(job.exec_fname).exists()
+        try:
+            evaluated_code = Path(job.exec_fname).read_text(encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Could not read code for job {job.job_id}. Error: {e}")
+            evaluated_code = ""
+
+        # =====================================================================
+        # 【修复】文件不存在时直接记录失败，跳过 repair
+        # =====================================================================
+        # 这种情况发生在 patch 生成完全失败（所有尝试都失败）时
+        if not file_exists:
+            logger.warning(
+                f"[Patch Failed] File does not exist for gen {job.generation}: "
+                f"{job.exec_fname}. Skipping repair (no code to repair)."
+            )
+            self._add_to_failure_buffer(
+                program_id=str(uuid.uuid4()),
+                generation=job.generation,
+                compile_error_type="patch_generation_failed",
+                compile_error_msg="Patch generation failed - no file created",
+                statement="",
+                repair_attempts=0,
+                repair_llm_calls_used=0,
+                final_status="patch_failed",
+            )
+            return
+
+        # 提取 metrics
+        metrics_val = results.get("metrics", {}) if results else {}
+        compile_ok = metrics_val.get("compile_ok", 0)
+        compile_error_type = metrics_val.get("compile_error_type", "")
+        compile_error_msg = metrics_val.get("compile_error_msg", "")
+        statement = metrics_val.get("statement", "")
+        original_code = str(metrics_val.get("code") or evaluated_code or "")
+
+        # =====================================================================
+        # 【约束 A, B】compile_ok=0 的处理
+        # =====================================================================
+        if compile_ok == 0:
+            # Track compile-fail candidates in meta memory (global insights),
+            # without inserting them into the DB/archive (constraint B).
+            try:
+                pseudo_program = Program(
+                    id=str(uuid.uuid4()),
+                    code=evaluated_code,
+                    language=self.evo_config.language,
+                    parent_id=job.parent_id,
+                    generation=job.generation,
+                    archive_inspiration_ids=job.archive_insp_ids,
+                    top_k_inspiration_ids=job.top_k_insp_ids,
+                    combined_score=float(metrics_val.get("combined_score", 0.0) or 0.0),
+                    public_metrics=metrics_val.get("public", {}) or {"compile_ok": 0},
+                    private_metrics=metrics_val.get("private", {}) or {
+                        "compile_error_type": compile_error_type,
+                        "compile_error_msg": compile_error_msg,
+                    },
+                    correct=False,
+                    metadata={
+                        "patch_type": (job.meta_patch_data or {}).get("patch_type"),
+                        "error_attempt": (job.meta_patch_data or {}).get("error_attempt"),
+                        "compile_error_type": compile_error_type,
+                        "compile_error_msg": compile_error_msg,
+                    },
+                )
+                self.meta_summarizer.add_evaluated_program(pseudo_program)
+            except Exception:
+                pass
+            logger.info(
+                f"[Repair] compile_ok=0 detected for gen {job.generation}, "
+                f"error_type: {compile_error_type}"
+            )
+
+            # 【修复】如果 statement 为空，尝试从文件直接读取
+            # 这处理 normalize_lean_statement 返回空字符串的情况
+            if not statement and evaluated_code:
+                # 尝试从原始文件内容提取 statement
+                statement = normalize_lean_statement(evaluated_code)
+                if statement:
+                    logger.info(
+                        f"[Repair] Recovered statement from file content for gen {job.generation}"
+                    )
+
+            # 【修复】如果没有可用代码且没有有效错误信息，跳过 repair
+            if not original_code and not compile_error_msg:
+                logger.warning(
+                    f"[Repair] Empty code and no error info for gen {job.generation}. "
+                    f"Skipping repair (nothing to repair)."
+                )
+                self._add_to_failure_buffer(
+                    program_id=str(uuid.uuid4()),
+                    generation=job.generation,
+                    compile_error_type="empty_statement",
+                    compile_error_msg="Code is empty after normalization",
+                    statement="",
+                    repair_attempts=0,
+                    repair_llm_calls_used=0,
+                    final_status="empty_code",
+                )
+                return
+
+            def _maybe_run_evolast_compile_fallback(
+                *,
+                reason: str,
+                attempt: int,
+                write_llm_fail_marker: bool,
+            ) -> None:
+                """Try EvolAST on parent to produce a compile_ok=1 fallback candidate.
+
+                Contract (per user spec):
+                - EvolAST output is NEVER sent to LLM repair.
+                - EvolAST is used as a compile-safety fallback and/or diversity booster.
+                """
+                if not (
+                    self.enable_evolast_fallback
+                    and self.evo_config.language == "lean"
+                    and job.parent_id
+                ):
+                    return
+
+                # Marker file for post-hoc diagnosis: preserve the original LLM candidate
+                # that failed compile, so users can verify fallback was triggered and inspect the failure.
+                if write_llm_fail_marker:
+                    try:
+                        exec_path = Path(job.exec_fname)
+                        suffix = exec_path.suffix or f".{self.lang_ext}"
+                        llm_fail_path = exec_path.with_suffix(f".llm_fail{suffix}")
+                        if exec_path.exists() and not llm_fail_path.exists():
+                            llm_fail_path.write_text(exec_path.read_text(encoding="utf-8"), encoding="utf-8")
+                    except Exception:
+                        pass
+
+                parent_code = ""
+                for p in self.db.get_all_programs():
+                    if getattr(p, "id", None) == job.parent_id:
+                        parent_code = str(getattr(p, "code", "") or "")
+                        break
+                if not parent_code.strip():
+                    return
+
+                try:
+                    from evolast_lean import apply_evolast_to_lean_code, parse_rule_weights
+
+                    evolast_mode = os.environ.get("AUTOFORMAL_EVOLAST_MODE", "").strip() or "safe"
+                    evolast_p = 0.35
+                    evolast_max_rewrites = 32
+                    try:
+                        raw_p = str(os.environ.get("AUTOFORMAL_EVOLAST_P", "") or "").strip()
+                        if raw_p:
+                            evolast_p = float(raw_p)
+                    except Exception:
+                        evolast_p = 0.35
+                    try:
+                        raw_m = str(os.environ.get("AUTOFORMAL_EVOLAST_MAX_REWRITES", "") or "").strip()
+                        if raw_m:
+                            evolast_max_rewrites = int(raw_m)
+                    except Exception:
+                        evolast_max_rewrites = 32
+                    evolast_weights = parse_rule_weights(os.environ.get("AUTOFORMAL_EVOLAST_RULE_WEIGHTS"))
+
+                    # Use a stable seed so reruns are reproducible (given same parent_id + gen).
+                    seed_material = f"{job.parent_id}|{job.generation}|{attempt}|{reason}"
+                    seed = int(hashlib.sha256(seed_material.encode("utf-8")).hexdigest()[:8], 16)
+                    fallback_code, fallback_info = apply_evolast_to_lean_code(
+                        parent_code,
+                        mode=evolast_mode,
+                        p=float(evolast_p),
+                        max_rewrites=int(evolast_max_rewrites),
+                        rule_weights=dict(evolast_weights),
+                        seed=seed,
+                    )
+                    fallback_code = str(fallback_code or "").strip()
+                    if not fallback_code or fallback_code.strip() == parent_code.strip():
+                        return
+
+                    evolast_fname = job.exec_fname.replace(
+                        f".{self.lang_ext}", f"_evolast{attempt}.{self.lang_ext}"
+                    )
+                    Path(evolast_fname).write_text(fallback_code, encoding="utf-8")
+                    evolast_results_dir = Path(job.exec_fname).parent / f"results_evolast{attempt}"
+                    evolast_results_dir.mkdir(parents=True, exist_ok=True)
+
+                    results2, rtime2 = self.scheduler.run(str(evolast_fname), str(evolast_results_dir))
+                    metrics2 = results2.get("metrics", {}) if results2 else {}
+                    if int(metrics2.get("compile_ok", 0) or 0) != 1:
+                        return
+
+                    code_embedding2, e_cost2 = self.get_code_embedding(str(evolast_fname))
+                    db_program = Program(
+                        id=str(uuid.uuid4()),
+                        code=fallback_code,
+                        language=self.evo_config.language,
+                        parent_id=job.parent_id,
+                        generation=job.generation,
+                        archive_inspiration_ids=job.archive_insp_ids,
+                        top_k_inspiration_ids=job.top_k_insp_ids,
+                        code_diff=None,
+                        embedding=code_embedding2,
+                        correct=True,
+                        combined_score=float(metrics2.get("combined_score", 0.0) or 0.0),
+                        public_metrics=metrics2.get("public", {}) or {"compile_ok": 1},
+                        private_metrics=metrics2.get("private", {}) or {},
+                        text_feedback=metrics2.get("text_feedback", "") or "",
+                        metadata={
+                            "compute_time": float(rtime2 or 0.0),
+                            **(job.meta_patch_data or {}),
+                            "embed_cost": float(e_cost2 or 0.0),
+                            "novelty_cost": 0.0,
+                            "patch_type": "evolast",
+                            "patch_name": f"evolast_{evolast_mode}",
+                            "patch_description": f"EvolAST fallback on parent after compile-fail ({reason}).",
+                            "evolast_fallback_used": 1,
+                            "evolast_fallback_reason": str(reason or ""),
+                            "evolast_fallback_attempt": int(attempt),
+                            "evolast_fallback_seed": int(seed),
+                            "evolast_fallback_mode": evolast_mode,
+                            "evolast_fallback_info": fallback_info
+                            if isinstance(fallback_info, dict)
+                            else {"info": str(fallback_info)},
+                        },
+                    )
+                    self.db.add(db_program, verbose=True)
+                    self.db.save()
+                    self._update_best_solution()
+                    self._post_process_program(db_program, job)
+                    logger.info(
+                        f"[EvolAST] Fallback SUCCESS: gen={job.generation} attempt={attempt} "
+                        f"new_id={db_program.id[:8]} reason={reason}"
+                    )
+                except Exception as e:
+                    if self.verbose:
+                        logger.info(
+                            f"[EvolAST] Fallback skipped: attempt={attempt} "
+                            f"{type(e).__name__}: {e}"
+                        )
+
+            if self.repair_config.enabled:
+                # Per user spec: even if we will run LLM repair, also try an EvolAST compile-fallback
+                # immediately so we have at least one "feasible (compile_ok=1)" candidate ASAP.
+                _maybe_run_evolast_compile_fallback(
+                    reason=f"compile_fail_immediate:{compile_error_type or 'unknown'}",
+                    attempt=1,
+                    write_llm_fail_marker=True,
+                )
+
+                # 创建 repair item 并尝试修复
+                repair_item = RepairQueueItem(
+                    program_id=str(uuid.uuid4()),
+                    exec_fname=job.exec_fname,
+                    results_dir=job.results_dir,
+                    generation=job.generation,
+                    parent_id=job.parent_id,
+                    compile_error_type=compile_error_type,
+                    compile_error_msg=compile_error_msg,
+                    original_code=original_code,
+                    repair_attempts=0,
+                )
+                repaired_program = self._process_repair(repair_item, job)
+
+                # Optional: a second EvolAST attempt after repair is exhausted (still no LLM repair on EvolAST).
+                if repaired_program is None:
+                    _maybe_run_evolast_compile_fallback(
+                        reason=f"compile_fail_repair_exhausted:{compile_error_type or 'unknown'}",
+                        attempt=2,
+                        write_llm_fail_marker=False,
+                    )
+            else:
+                # Repair 禁用，直接记录失败
+                self._add_to_failure_buffer(
+                    program_id=str(uuid.uuid4()),
+                    generation=job.generation,
+                    compile_error_type=compile_error_type,
+                    compile_error_msg=compile_error_msg,
+                    statement=statement,
+                    repair_attempts=0,
+                    repair_llm_calls_used=0,
+                    final_status="no_repair",
+                )
+                # Optional: EvolAST fallback (compile-fail, repair disabled).
+                _maybe_run_evolast_compile_fallback(
+                    reason=f"compile_fail_no_repair:{compile_error_type or 'unknown'}",
+                    attempt=1,
+                    write_llm_fail_marker=True,
+                )
+            # 【关键】compile_ok=0 不入 archive，直接返回
+            return
+
+        # =====================================================================
+        # compile_ok=1: 正常处理流程
+        # =====================================================================
+        # 使用预计算的 embedding 和 novelty cost
+        code_embedding = job.code_embedding
+        e_cost = job.embed_cost
+        n_cost = job.novelty_cost
+
+        correct_val = False
+        stdout_log = ""
+        stderr_log = ""
+        if results:
+            # For autoformalization, "correct" is equivalent to compile_ok=1 (compile is the hard validity gate).
+            correct_val = True
+            stdout_log = results.get("stdout_log", "")
+            stderr_log = results.get("stderr_log", "")
+
+        combined_score = metrics_val.get("combined_score", 0.0)
+        public_metrics = metrics_val.get("public", {})
+        private_metrics = metrics_val.get("private", {})
+        text_feedback = metrics_val.get("text_feedback", "")
+
+        # 硬过滤：`theorem ... : True := ...` 属于占位符，绝对禁止进入 archive/parent/inspirations。
+        # 这里做兜底（正常情况下应已在 run_patch / Gen0 阶段被拒收）。
+        if self.evo_config.language == "lean":
+            stmt_for_guard = str(statement or "").strip()
+            if not stmt_for_guard and evaluated_code:
+                stmt_for_guard = normalize_lean_statement(evaluated_code)
+            if stmt_for_guard and is_trivial_tautology_placeholder(stmt_for_guard):
+                logger.warning(
+                    f"[Filter] Trivial placeholder detected at gen {job.generation}; "
+                    "marking as incorrect and excluding from archive."
+                )
+                self._add_to_failure_buffer(
+                    program_id=str(uuid.uuid4()),
+                    generation=job.generation,
+                    compile_error_type="placeholder_trivial_tautology",
+                    compile_error_msg="Forbidden placeholder: trivial/tautological statement",
+                    statement=stmt_for_guard,
+                    repair_attempts=0,
+                    repair_llm_calls_used=0,
+                    final_status="placeholder_filtered",
+                )
+
+                # Insert as incorrect (not archived) to avoid generation gaps in bookkeeping.
+                filtered_program = Program(
+                    id=str(uuid.uuid4()),
+                    code=evaluated_code,
+                    language=self.evo_config.language,
+                    parent_id=job.parent_id,
+                    generation=job.generation,
+                    archive_inspiration_ids=job.archive_insp_ids,
+                    top_k_inspiration_ids=job.top_k_insp_ids,
+                    code_diff=job.code_diff,
+                    embedding=code_embedding,
+                    correct=False,
+                    combined_score=0.0,
+                    public_metrics=public_metrics,
+                    private_metrics=private_metrics,
+                    text_feedback=text_feedback,
+                    metadata={
+                        "compute_time": rtime,
+                        **(job.meta_patch_data or {}),
+                        "embed_cost": e_cost,
+                        "novelty_cost": n_cost,
+                        "stdout_log": stdout_log,
+                        "stderr_log": stderr_log,
+                        "hard_filter_reason": "placeholder_trivial_tautology",
+                    },
+                )
+                self.db.add(filtered_program, verbose=True)
+                self.db.save()
+                return
+
+        # 【约束 B】只有 compile_ok=1 才存入 archive
+        db_program = Program(
+            id=str(uuid.uuid4()),
+            code=evaluated_code,
+            language=self.evo_config.language,
+            parent_id=job.parent_id,
+            generation=job.generation,
+            archive_inspiration_ids=job.archive_insp_ids,
+            top_k_inspiration_ids=job.top_k_insp_ids,
+            code_diff=job.code_diff,
+            embedding=code_embedding,
+            correct=correct_val,
+            combined_score=combined_score,
+            public_metrics=public_metrics,
+            private_metrics=private_metrics,
+            text_feedback=text_feedback,
+            metadata={
+                "compute_time": rtime,
+                **(job.meta_patch_data or {}),
+                "embed_cost": e_cost,
+                "novelty_cost": n_cost,
+                "stdout_log": stdout_log,
+                "stderr_log": stderr_log,
+                "fitness_tuple": list(metrics_val.get("fitness_tuple", (1, 0, 0, 0.0))),
+                "cycle_log_prob": metrics_val.get("cycle_log_prob"),
+                "cycle_normalized_log_prob": metrics_val.get("cycle_normalized_log_prob"),
+                "cycle_score": metrics_val.get("cycle_score", 0.0),
+            },
+        )
+
+        self.db.add(db_program, verbose=True)
+        logger.info(
+            f"[Archive] Added compile_ok=1 candidate: gen={job.generation}, "
+            f"score={combined_score:.2f}, tuple={metrics_val.get('fitness_tuple')}"
+        )
+
+        # Seed0(file) 剔除：一旦出现任意 Gen>=1 的 compile_ok=1 程序进入 archive，
+        # 就删除来自 `--init_program` 的 seed0（及其岛屿拷贝），避免后续采样退化回占位符。
+        if not self._file_seed0_pruned and int(getattr(job, "generation", 0) or 0) > 0:
+            delete_fn = getattr(self.db, "delete_file_seed0", None)
+            deleted_count = int(delete_fn()) if callable(delete_fn) else 0
+            if deleted_count > 0:
+                logger.info(
+                    f"[Prune] Removed {deleted_count} file seed0 program(s) from archive "
+                    "after first Gen>=1 compile_ok=1 program entered archive"
+                )
+            self._file_seed0_pruned = True
+
+        # 后续处理（meta memory, LLM selection 等）
+        self._post_process_program(db_program, job)
+
+    def _process_repair(self, repair_item: RepairQueueItem, original_job: RunningJob):
+        """
+        处理 compile_fail 候选的修复。
+
+        ================================================================================
+                         Repair 机制的核心实现
+        ================================================================================
+
+        【执行流程】
+        for attempt in range(max_attempts):
+            1. 构建 repair prompt（包含错误信息）
+            2. 调用 LLM 生成修复版本（temp=0）
+            3. 【约束 C】计入预算
+            4. 提取修复后的代码
+            5. 重新评估
+            6. 检查 compile_ok:
+               - 成功 → 存入 archive，返回
+               - 失败 → 更新错误信息，继续下一次尝试
+
+        【为什么用 temp=0？】
+        修复任务需要的是"正确"而不是"多样"。
+        高温度可能产生更多变体，但我们只想修复语法错误，不需要创造性。
+
+        Args:
+            repair_item: 需要修复的候选
+            original_job: 原始的任务对象（用于获取上下文）
+        """
+        max_attempts = self.repair_config.max_repair_attempts
+        if repair_item.generation == 0 and self.repair_config.max_repair_attempts_gen0:
+            max_attempts = int(self.repair_config.max_repair_attempts_gen0)
+
+        # Optional: budget triage — skip repair for certain error types.
+        try:
+            skip_types = {t.lower() for t in (getattr(self, "repair_skip_error_types", set()) or set())}
+        except Exception:
+            skip_types = set()
+        err_type_norm = str(repair_item.compile_error_type or "").strip().lower()
+        if skip_types and err_type_norm in skip_types:
+            logger.info(
+                f"[Repair] Skipping compile repair due to policy: error_type={repair_item.compile_error_type}"
+            )
+            self._add_to_failure_buffer(
+                program_id=repair_item.program_id,
+                generation=repair_item.generation,
+                compile_error_type=repair_item.compile_error_type,
+                compile_error_msg=repair_item.compile_error_msg,
+                statement=normalize_lean_statement(repair_item.original_code),
+                repair_attempts=0,
+                repair_llm_calls_used=0,
+                final_status="repair_skipped",
+            )
+            return None
+
+        dump_repair_raw = _env_truthy("AUTOFORMAL_DUMP_REPAIR_RAW")
+        dump_dir: Optional[Path] = None
+        if dump_repair_raw:
+            dump_dir = Path(self.results_dir) / "repair_dumps"
+            dump_dir.mkdir(parents=True, exist_ok=True)
+
+        def _maybe_dump_repair_attempt(
+            *,
+            payload: Dict[str, Any],
+            raw_content: Optional[str],
+        ) -> None:
+            if dump_dir is None:
+                return
+            try:
+                program_id = str(payload.get("program_id") or repair_item.program_id or "unknown")
+                generation = int(payload.get("generation") or repair_item.generation or 0)
+                attempt = int(payload.get("attempt") or 0)
+                stem = f"{program_id}_gen{generation}_attempt{attempt:02d}"
+                (dump_dir / f"{stem}.json").write_text(
+                    json.dumps(payload, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                if raw_content is not None:
+                    (dump_dir / f"{stem}.raw.txt").write_text(raw_content, encoding="utf-8")
+            except Exception:
+                # Debug-only: never fail the run because dumping failed.
+                return
+
+        budget_reason_hit: Optional[str] = None
+        for attempt in range(max_attempts):
+            # Budget guard: avoid uncontrolled overshoot inside repair loops.
+            budget_reason = self._check_budget_exhausted()
+            if budget_reason is not None:
+                budget_reason_hit = budget_reason
+                self.termination_reason = budget_reason
+                logger.info(f"[Repair] Budget exhausted before attempt {attempt + 1}: {budget_reason}")
+                break
+
+            repair_item.repair_attempts = attempt + 1
+            logger.info(
+                f"[Repair] Attempt {attempt + 1}/{max_attempts} for gen {repair_item.generation}"
+            )
+
+            # 构建 repair prompt
+            sys_msg, user_msg = build_repair_prompt(
+                original_code=repair_item.original_code,
+                compile_error_type=repair_item.compile_error_type,
+                compile_error_msg=repair_item.compile_error_msg,
+                informal=self.problem_config.get("informal", ""),
+                reference_header=self.problem_config.get("header", ""),
+            )
+
+            llm_kwargs = self.llm.get_kwargs()
+            llm_kwargs["temperature"] = self.repair_config.repair_temperature
+
+            # 【约束 C】调用 LLM，计入预算（口径：底层 LLM client 的 total_calls 增量）
+            repair_llm = self._repair_llm_override()
+            before_calls = getattr(self.llm, "total_calls", None)
+            response = None
+            llm_kwargs_eff = dict(llm_kwargs or {})
+            try:
+                if repair_llm.get("enabled"):
+                    logger.info(
+                        f"[Repair] Using repair-only LLM override: "
+                        f"model={repair_llm.get('model_name','')}, "
+                        f"base_url={repair_llm.get('base_url','')}"
+                    )
+                    llm_kwargs_eff["model_name"] = str(repair_llm.get("model_name") or "")
+                    with _temporary_env({"OPENAI_LLM_BASE_URL": str(repair_llm.get("base_url") or "")}):
+                        response = self.llm.query(
+                            msg=user_msg,
+                            system_msg=sys_msg,
+                            llm_kwargs=llm_kwargs_eff,
+                        )
+                else:
+                    response = self.llm.query(
+                        msg=user_msg,
+                        system_msg=sys_msg,
+                        llm_kwargs=llm_kwargs_eff,
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[Repair] LLM query failed at attempt {attempt + 1}: {type(e).__name__}: {e}"
+                )
+                response = None
+            dump_payload: Dict[str, Any] = {
+                "timestamp_unix": time.time(),
+                "results_dir": str(self.results_dir),
+                "program_id": repair_item.program_id,
+                "generation": repair_item.generation,
+                "attempt": attempt + 1,
+                "max_attempts": max_attempts,
+                "exec_fname": repair_item.exec_fname,
+                "parent_id": repair_item.parent_id,
+                "compile_error_type": repair_item.compile_error_type,
+                "compile_error_msg": repair_item.compile_error_msg,
+                "original_code": repair_item.original_code,
+                "system_msg": sys_msg,
+                "user_msg": user_msg,
+                "llm_kwargs": dict(llm_kwargs_eff or {}),
+                "response": {
+                    "model_name": getattr(response, "model_name", None) if response else None,
+                    "cost": float(getattr(response, "cost", 0.0) or 0.0) if response else None,
+                    "input_tokens": getattr(response, "input_tokens", None) if response else None,
+                    "output_tokens": getattr(response, "output_tokens", None) if response else None,
+                },
+                "extract_between_code_fence": None,
+                "adapter_parsed_statement": None,
+                "normalized_statement": None,
+                "decision": None,
+            }
+            after_calls = getattr(self.llm, "total_calls", None)
+            if isinstance(before_calls, int) and isinstance(after_calls, int):
+                delta = max(after_calls - before_calls, 0)
+                calls_used = delta if delta > 0 else 1
+                self.total_repair_llm_calls += calls_used
+                repair_item.total_repair_llm_calls_used += calls_used
+            else:
+                # Fallback: assume one logical call.
+                self.total_repair_llm_calls += 1
+                repair_item.total_repair_llm_calls_used += 1
+
+            if response is None or response.content is None:
+                logger.warning(f"[Repair] LLM response was None, attempt {attempt + 1}")
+                dump_payload["decision"] = "llm_response_none"
+                _maybe_dump_repair_attempt(payload=dump_payload, raw_content=None)
+                continue
+
+            repair_item.total_repair_cost += response.cost or 0
+            self.total_repair_cost += response.cost or 0
+
+            raw_content = response.content
+
+            repaired_code, extracted_source = extract_best_lean_code_block_with_source(raw_content)
+            dump_payload["extract_between_code_fence"] = repaired_code
+
+            normalized_source = extracted_source if repaired_code else ""
+
+            # Fallback 1: try model adapter parsing on the full raw output.
+            if not repaired_code:
+                model_name = (
+                    str(getattr(response, "model_name", "") or "").strip()
+                    or str(repair_llm.get("model_name") or "").strip()
+                    or (self.evo_config.llm_models[0] if self.evo_config.llm_models else "")
+                )
+                adapter = get_model_adapter(model_name)
+                parsed_code = adapter.parse_output(raw_content) if adapter else None
+                dump_payload["adapter_parsed_code"] = parsed_code
+                repaired_code = normalize_lean_code(parsed_code or "")
+                if normalize_lean_statement(repaired_code):
+                    normalized_source = "adapter"
+                else:
+                    repaired_code = ""
+
+            # Fallback 2: normalize directly from raw output (handles "prompt echoed as comment" cases).
+            if not repaired_code:
+                repaired_code = normalize_lean_code(raw_content)
+                if normalize_lean_statement(repaired_code):
+                    normalized_source = "raw_output"
+                else:
+                    repaired_code = ""
+
+            dump_payload["normalized_code"] = repaired_code
+            dump_payload["normalized_source"] = normalized_source
+            dump_payload["normalized_statement_preview"] = normalize_lean_statement(repaired_code)[:200]
+
+            if not repaired_code:
+                logger.warning(f"[Repair] Empty/invalid Lean code after cleanup, attempt {attempt + 1}")
+                dump_payload["decision"] = "empty_code_after_cleanup"
+                _maybe_dump_repair_attempt(payload=dump_payload, raw_content=raw_content)
+                continue
+
+            dump_payload["decision"] = "code_extracted"
+            _maybe_dump_repair_attempt(payload=dump_payload, raw_content=raw_content)
+
+            # 【约束 C】重新评估，计入预算
+            self.total_repair_evals += 1
+
+            # 创建修复后的程序文件
+            repair_fname = repair_item.exec_fname.replace(
+                f".{self.lang_ext}", f"_repair{attempt + 1}.{self.lang_ext}"
+            )
+            repaired_program = self._build_repaired_program(repaired_code)
+            with open(repair_fname, "w") as f:
+                f.write(repaired_program)
+
+            # 运行评估
+            results, rtime = self.scheduler.run(repair_fname, repair_item.results_dir)
+
+            if results:
+                metrics = results.get("metrics", {})
+                new_compile_ok = metrics.get("compile_ok", 0)
+
+                if new_compile_ok == 1:
+                    # 修复成功！
+                    logger.info(
+                        f"[Repair] SUCCESS! Compile fixed after {attempt + 1} attempts"
+                    )
+
+                    # 存入 archive
+                    db_program = self._add_repaired_to_archive(
+                        repair_item,
+                        repaired_program,
+                        repair_fname,
+                        metrics,
+                        rtime,
+                        original_job,
+                    )
+
+                    # 记录到 failure_buffer（标记为成功）
+                    self._add_to_failure_buffer(
+                        program_id=repair_item.program_id,
+                        generation=repair_item.generation,
+                        compile_error_type=repair_item.compile_error_type,
+                        compile_error_msg=repair_item.compile_error_msg,
+                        statement=normalize_lean_statement(repair_item.original_code),
+                        repair_attempts=attempt + 1,
+                        repair_llm_calls_used=repair_item.total_repair_llm_calls_used,
+                        final_status="repair_success",
+                    )
+                    return db_program
+
+                # 修复失败，更新错误信息，继续下一次尝试
+                repair_item.compile_error_type = metrics.get("compile_error_type", "")
+                repair_item.compile_error_msg = metrics.get("compile_error_msg", "")
+                repair_item.original_code = str(metrics.get("code") or repaired_code or "")
+
+        if budget_reason_hit is not None:
+            # Budget exhausted: stop repair early and record for auditability.
+            self._add_to_failure_buffer(
+                program_id=repair_item.program_id,
+                generation=repair_item.generation,
+                compile_error_type=repair_item.compile_error_type,
+                compile_error_msg=repair_item.compile_error_msg,
+                statement=normalize_lean_statement(repair_item.original_code),
+                repair_attempts=repair_item.repair_attempts,
+                repair_llm_calls_used=repair_item.total_repair_llm_calls_used,
+                final_status="repair_budget_exhausted",
+            )
+            return None
+
+        # 修复次数用尽，仍然失败
+        logger.warning(
+            f"[Repair] EXHAUSTED after {max_attempts} attempts for gen {repair_item.generation}"
+        )
+        self._add_to_failure_buffer(
+            program_id=repair_item.program_id,
+            generation=repair_item.generation,
+            compile_error_type=repair_item.compile_error_type,
+            compile_error_msg=repair_item.compile_error_msg,
+            statement=normalize_lean_statement(repair_item.original_code),
+            repair_attempts=max_attempts,
+            repair_llm_calls_used=repair_item.total_repair_llm_calls_used,
+            final_status="repair_exhausted",
+        )
+        return None
+
+    def _process_semantic_repair(
+        self,
+        *,
+        base_program: Program,
+        base_job: RunningJob,
+        base_metrics: Dict[str, Any],
+        evaluated_code: str,
+    ) -> Optional[Program]:
+        """Semantic repair for compile_ok=1 but semantic_ok=0 candidates (when enabled).
+
+        Workflow:
+        - Provide CriticLean's "5. Accuracy Confirmation" feedback to the LLM.
+        - Allow changing hypotheses/conclusion to align semantics.
+        - Require the result to still compile.
+        - Success criterion: compile_ok=1 AND semantic_ok=1.
+        """
+        if not self.repair_config.enabled:
+            return None
+
+        if not bool(self.semantic_repair_enabled):
+            return None
+
+        use_semantic = bool(self.problem_config.get("use_semantic", False))
+        if not use_semantic:
+            return None
+
+        # Optional: stage semantic repair to late budget calls.
+        start_calls = getattr(self, "semantic_repair_start_calls", None)
+        if start_calls is not None:
+            try:
+                raw_llm_api_calls = int(getattr(self.llm, "total_calls", 0) or 0)
+            except Exception:
+                raw_llm_api_calls = 0
+            try:
+                debited = int(getattr(self, "seedbank_debited_calls", 0) or 0)
+            except Exception:
+                debited = 0
+            budget_calls = raw_llm_api_calls + debited
+            if budget_calls < int(start_calls):
+                return None
+
+        max_attempts = int(getattr(self.repair_config, "max_repair_attempts", 0) or 0)
+        if base_job.generation == 0 and getattr(self.repair_config, "max_repair_attempts_gen0", 0):
+            max_attempts = int(getattr(self.repair_config, "max_repair_attempts_gen0") or max_attempts)
+        # Allow semantic-repair-specific overrides (keeps compile-repair budgets intact).
+        override: Optional[int] = None
+        if base_job.generation == 0 and self.semantic_repair_max_attempts_gen0 is not None:
+            override = self.semantic_repair_max_attempts_gen0
+        elif self.semantic_repair_max_attempts is not None:
+            override = self.semantic_repair_max_attempts
+        if override is not None:
+            max_attempts = int(override)
+        if max_attempts <= 0:
+            return None
+
+        informal = str(self.problem_config.get("informal", "") or "")
+        reference_header = str(self.problem_config.get("header", "") or "")
+
+        current_code = str(base_metrics.get("code") or normalize_lean_code(evaluated_code) or evaluated_code or "")
+        current_accuracy = str(
+            base_metrics.get("critic_accuracy_confirmation")
+            or _extract_accuracy_confirmation_from_critic_raw(base_metrics.get("critic_raw", ""))
+            or ""
+        ).strip()
+        previous_compile_error = ""
+
+        # If Critic feedback is missing, do not attempt semantic repair (nothing to optimize against).
+        if not current_accuracy:
+            return None
+
+        for attempt in range(max_attempts):
+            budget_reason = self._check_budget_exhausted()
+            if budget_reason is not None:
+                self.termination_reason = budget_reason
+                logger.info(f"[SemanticRepair] Budget exhausted before attempt {attempt + 1}: {budget_reason}")
+                break
+
+            logger.info(
+                f"[SemanticRepair] Attempt {attempt + 1}/{max_attempts} "
+                f"for gen {base_job.generation} (base_id={base_program.id[:8]})"
+            )
+
+            sys_msg, user_msg = build_semantic_repair_prompt(
+                original_code=current_code,
+                informal=informal,
+                accuracy_confirmation=current_accuracy,
+                reference_header=reference_header,
+                previous_compile_error=previous_compile_error,
+            )
+
+            llm_kwargs = self.llm.get_kwargs()
+            # Semantic repair benefits from small exploration but should remain stable.
+            llm_kwargs["temperature"] = float(self.semantic_repair_temperature)
+
+            repair_llm = self._repair_llm_override()
+            before_calls = getattr(self.llm, "total_calls", None)
+            response = None
+            llm_kwargs_eff = dict(llm_kwargs or {})
+            try:
+                if repair_llm.get("enabled"):
+                    logger.info(
+                        f"[SemanticRepair] Using repair-only LLM override: "
+                        f"model={repair_llm.get('model_name','')}, "
+                        f"base_url={repair_llm.get('base_url','')}"
+                    )
+                    llm_kwargs_eff["model_name"] = str(repair_llm.get("model_name") or "")
+                    with _temporary_env({"OPENAI_LLM_BASE_URL": str(repair_llm.get("base_url") or "")}):
+                        response = self.llm.query(msg=user_msg, system_msg=sys_msg, llm_kwargs=llm_kwargs_eff)
+                else:
+                    response = self.llm.query(msg=user_msg, system_msg=sys_msg, llm_kwargs=llm_kwargs_eff)
+            except Exception as e:
+                logger.warning(
+                    f"[SemanticRepair] LLM query failed at attempt {attempt + 1}: {type(e).__name__}: {e}"
+                )
+                response = None
+            after_calls = getattr(self.llm, "total_calls", None)
+            if isinstance(before_calls, int) and isinstance(after_calls, int):
+                delta = max(after_calls - before_calls, 0)
+                calls_used = delta if delta > 0 else 1
+            else:
+                calls_used = 1
+            self.total_semantic_repair_llm_calls += calls_used
+            self.total_semantic_repair_cost += float(getattr(response, "cost", 0.0) or 0.0)
+
+            if response is None or response.content is None:
+                logger.warning(f"[SemanticRepair] LLM response was None, attempt {attempt + 1}")
+                continue
+
+            raw_content = response.content
+
+            # Extract best Lean code block (prefer the last fenced block containing a declaration).
+            repaired_code = extract_best_lean_code_block(raw_content) or ""
+            if not repaired_code:
+                model_name = (
+                    str(getattr(response, "model_name", "") or "").strip()
+                    or str(repair_llm.get("model_name") or "").strip()
+                    or (self.evo_config.llm_models[0] if self.evo_config.llm_models else "")
+                )
+                adapter = get_model_adapter(model_name)
+                parsed_code = adapter.parse_output(raw_content) if adapter else None
+                cand = normalize_lean_code(parsed_code or "")
+                if normalize_lean_statement(cand):
+                    repaired_code = cand
+
+            if not repaired_code:
+                logger.warning(f"[SemanticRepair] Empty/invalid Lean code, attempt {attempt + 1}")
+                continue
+
+            # Evaluate the semantic-repaired program.
+            self.total_semantic_repair_evals += 1
+            repair_fname = base_job.exec_fname.replace(
+                f".{self.lang_ext}", f"_semrepair{attempt + 1}.{self.lang_ext}"
+            )
+            repaired_program = self._build_repaired_program(repaired_code)
+            Path(repair_fname).write_text(repaired_program, encoding="utf-8")
+
+            # Use a dedicated results directory to avoid overwriting the base candidate's results.
+            sem_results_dir = Path(base_job.exec_fname).parent / f"results_semrepair_{attempt + 1:02d}"
+            sem_results_dir.mkdir(parents=True, exist_ok=True)
+            results, rtime = self.scheduler.run(repair_fname, str(sem_results_dir))
+
+            metrics = results.get("metrics", {}) if results else {}
+            compile_ok = int(metrics.get("compile_ok", 0) or 0)
+            semantic_ok = int(metrics.get("semantic_ok", 0) or 0)
+
+            if compile_ok != 1:
+                previous_compile_error = str(metrics.get("compile_error_msg", "") or "")
+                current_code = str(metrics.get("code") or repaired_code or "")
+                logger.info(
+                    f"[SemanticRepair] compile_ok=0 after attempt {attempt + 1}; "
+                    "continuing with compiler feedback."
+                )
+                continue
+
+            # compile_ok == 1: update code/feedback from metrics.
+            current_code = str(metrics.get("code") or repaired_code or "")
+            previous_compile_error = ""
+
+            if semantic_ok == 1:
+                # Success: add repaired program as a new child in the archive.
+                code_embedding, e_cost = self.get_code_embedding(repair_fname)
+                stdout_log = results.get("stdout_log", "") if results else ""
+                stderr_log = results.get("stderr_log", "") if results else ""
+
+                sem_job = RunningJob(
+                    job_id=f"semantic_repair_{base_program.id[:8]}_{attempt + 1}",
+                    exec_fname=repair_fname,
+                    results_dir=str(sem_results_dir),
+                    start_time=time.time(),
+                    generation=base_job.generation,
+                    parent_id=base_program.id,
+                    archive_insp_ids=getattr(base_job, "archive_insp_ids", []) or [],
+                    top_k_insp_ids=getattr(base_job, "top_k_insp_ids", []) or [],
+                    code_diff=None,
+                    meta_patch_data={
+                        **(base_job.meta_patch_data or {}),
+                        "patch_type": "semantic_repair",
+                        "semantic_repair_attempt": int(attempt + 1),
+                        "semantic_repair_source_program_id": base_program.id,
+                    },
+                )
+
+                db_program = Program(
+                    id=str(uuid.uuid4()),
+                    code=repaired_program,
+                    language=self.evo_config.language,
+                    parent_id=base_program.id,
+                    generation=base_job.generation,
+                    archive_inspiration_ids=sem_job.archive_insp_ids,
+                    top_k_inspiration_ids=sem_job.top_k_insp_ids,
+                    code_diff=None,
+                    embedding=code_embedding,
+                    correct=True,
+                    combined_score=float(metrics.get("combined_score", 0.0) or 0.0),
+                    public_metrics=metrics.get("public", {}) or {},
+                    private_metrics=metrics.get("private", {}) or {},
+                    text_feedback=metrics.get("text_feedback", "") or "",
+                    metadata={
+                        "compute_time": rtime,
+                        **(base_job.meta_patch_data or {}),
+                        "embed_cost": e_cost,
+                        "stdout_log": stdout_log,
+                        "stderr_log": stderr_log,
+                        "patch_type": "semantic_repair",
+                        "semantic_repaired": True,
+                        "semantic_repair_attempt": int(attempt + 1),
+                        "semantic_repair_source_program_id": base_program.id,
+                        "semantic_repair_accuracy_sha256": hashlib.sha256(
+                            current_accuracy.encode("utf-8")
+                        ).hexdigest()
+                        if current_accuracy
+                        else "",
+                        "fitness_tuple": list(metrics.get("fitness_tuple", (1, 0, 0, 0.0))),
+                        "cycle_log_prob": metrics.get("cycle_log_prob"),
+                        "cycle_normalized_log_prob": metrics.get("cycle_normalized_log_prob"),
+                        "cycle_score": metrics.get("cycle_score", 0.0),
+                    },
+                )
+
+                self.db.add(db_program, verbose=True)
+                self.total_semantic_repair_successes += 1
+                logger.info(
+                    f"[SemanticRepair] SUCCESS: gen={base_job.generation}, "
+                    f"base_id={base_program.id[:8]}, new_id={db_program.id[:8]}"
+                )
+                self._post_process_program(db_program, sem_job)
+                return db_program
+
+            # semantic_ok == 0: update critic feedback for next attempt, if available.
+            current_accuracy = str(metrics.get("critic_accuracy_confirmation") or current_accuracy or "").strip()
+
+        return None
+
+    def _build_repaired_program(self, statement: str) -> str:
+        """
+        从修复后的 statement 构建完整的 Lean 文件内容。
+        """
+        statement = statement.strip()
+        if "EVOLVE-BLOCK-START" in statement or "EVOLVE-BLOCK-END" in statement:
+            return statement
+        return (
+            "-- EVOLVE-BLOCK-START\n"
+            f"{statement}\n"
+            "-- EVOLVE-BLOCK-END\n"
+        )
+
+    def _add_repaired_to_archive(
+        self,
+        repair_item: RepairQueueItem,
+        repaired_code: str,
+        repaired_exec_fname: str,
+        metrics: Dict[str, Any],
+        compute_time: float,
+        original_job: RunningJob,
+    ) -> Program:
+        """将修复成功的程序存入 archive，并返回插入的 Program。"""
+        code_embedding, e_cost = self.get_code_embedding(repaired_exec_fname)
+
+        db_program = Program(
+            id=str(uuid.uuid4()),
+            code=repaired_code,
+            language=self.evo_config.language,
+            parent_id=repair_item.parent_id,
+            generation=repair_item.generation,
+            archive_inspiration_ids=original_job.archive_insp_ids,
+            top_k_inspiration_ids=original_job.top_k_insp_ids,
+            code_diff=None,
+            embedding=code_embedding,
+            correct=metrics.get("compile_ok", 0) == 1,
+            combined_score=metrics.get("combined_score", 0.0),
+            public_metrics=metrics.get("public", {}),
+            private_metrics=metrics.get("private", {}),
+            text_feedback=metrics.get("text_feedback", ""),
+            metadata={
+                "compute_time": compute_time,
+                **(original_job.meta_patch_data or {}),
+                "embed_cost": e_cost,
+                "repair_attempts": repair_item.repair_attempts,
+                "repair_cost": repair_item.total_repair_cost,
+                "llm_calls_used": int(repair_item.total_repair_llm_calls_used or 0),
+                "original_error_type": repair_item.compile_error_type,
+                "fitness_tuple": list(metrics.get("fitness_tuple", (1, 0, 0, 0.0))),
+                "repaired": True,  # 标记这是修复后的程序
+                "cycle_log_prob": metrics.get("cycle_log_prob", None),
+                "cycle_normalized_log_prob": metrics.get("cycle_normalized_log_prob", None),
+                "cycle_score": metrics.get("cycle_score", None),
+            },
+        )
+
+        self.db.add(db_program, verbose=True)
+        self.db.save()
+        self._update_best_solution()
+        self.meta_summarizer.add_evaluated_program(db_program)
+        return db_program
+
+    def _add_to_failure_buffer(
+        self,
+        program_id: str,
+        generation: int,
+        compile_error_type: str,
+        compile_error_msg: str,
+        statement: str,
+        repair_attempts: int,
+        repair_llm_calls_used: int,
+        final_status: str,
+    ):
+        """添加记录到 failure_buffer。"""
+        record = FailureRecord(
+            program_id=program_id,
+            generation=generation,
+            compile_error_type=compile_error_type,
+            compile_error_msg=compile_error_msg,
+            statement=statement,
+            repair_attempts=repair_attempts,
+            repair_llm_calls_used=int(repair_llm_calls_used or 0),
+            final_status=final_status,
+            timestamp=time.time(),
+        )
+        self.failure_buffer.add(record)
+
+    def _post_process_program(self, db_program: Program, job: RunningJob):
+        """程序成功入库后的后续处理。"""
+        # Meta memory 跟踪
+        self.meta_summarizer.add_evaluated_program(db_program)
+        # Meta update: trigger periodically based on the number of unprocessed
+        # evaluated programs (same semantics as shinka/core/runner.py).
+        if self.meta_summarizer.should_update_meta(getattr(self.evo_config, "meta_rec_interval", None)):
+            logger.info(
+                f"[Meta] Updating meta memory after processing "
+                f"{len(self.meta_summarizer.evaluated_since_last_meta)} programs..."
+            )
+            best_program = self.db.get_best_program()
+            updated_recs, meta_cost = self.meta_summarizer.update_meta_memory(best_program)
+            if updated_recs:
+                self.meta_summarizer.write_meta_output(str(self.results_dir))
+                if meta_cost and meta_cost > 0:
+                    logger.info(f"[Meta] Update cost: ${meta_cost:.4f}")
+
+        # LLM selection 更新
+        if self.llm_selection is not None and db_program.metadata:
+            if "model_name" in db_program.metadata:
+                parent = (
+                    self.db.get(db_program.parent_id) if db_program.parent_id else None
+                )
+                baseline = parent.combined_score if parent else None
+                reward = db_program.combined_score if db_program.correct else None
+                model_name = db_program.metadata["model_name"]
+                self.llm_selection.update(
+                    arm=model_name,
+                    reward=reward,
+                    baseline=baseline,
+                )
+
+        self.db.save()
+        self._update_best_solution()
+        self._save_meta_memory()
+
+        # Optional: semantic repair for compile_ok=1 but semantic_ok=0 candidates.
+        try:
+            if self.semantic_repair_enabled and bool(self.problem_config.get("use_semantic", False)):
+                pm = db_program.public_metrics or {}
+                compile_ok = int(pm.get("compile_ok", 0) or 0)
+                semantic_ok = int(pm.get("semantic_ok", 0) or 0)
+                if compile_ok == 1 and semantic_ok == 0:
+                    # We need the original job metadata for file paths; fall back to a minimal stub.
+                    base_job = job
+                    base_metrics = {}
+                    try:
+                        results = self.scheduler.get_job_results(job.job_id, job.results_dir)
+                        base_metrics = (results or {}).get("metrics", {}) or {}
+                    except Exception:
+                        base_metrics = {}
+
+                    evaluated_code = str(db_program.code or "")
+                    self._process_semantic_repair(
+                        base_program=db_program,
+                        base_job=base_job,
+                        base_metrics=base_metrics,
+                        evaluated_code=evaluated_code,
+                    )
+        except Exception:
+            # Semantic repair is optional; never break the main run.
+            pass
+
+    def _maybe_update_meta_by_generation(self):
+        """Update global meta once every N generations (N = evo_config.meta_rec_interval).
+
+        NOTE: For this Lean task we interpret `meta_rec_interval` as a generation
+        interval (per user spec: update every ~10 generations).
+        """
+        interval = int(getattr(self.evo_config, "meta_rec_interval", 0) or 0)
+        if interval <= 0 or self.meta_llm is None:
+            return
+        if self.completed_generations <= 0:
+            return
+        if self.completed_generations == self._last_meta_update_generation:
+            return
+        if (self.completed_generations % interval) != 0:
+            return
+        if len(self.meta_summarizer.evaluated_since_last_meta) == 0:
+            self._last_meta_update_generation = self.completed_generations
+            return
+
+        logger.info(
+            f"[Meta] Triggered at completed_generations={self.completed_generations} "
+            f"(interval={interval}, pending={len(self.meta_summarizer.evaluated_since_last_meta)})"
+        )
+        best_program = self.db.get_best_program()
+        updated_recs, meta_cost = self.meta_summarizer.update_meta_memory(best_program)
+        if updated_recs:
+            self.meta_summarizer.write_meta_output(str(self.results_dir))
+            if meta_cost and meta_cost > 0:
+                logger.info(f"[Meta] Update cost: ${meta_cost:.4f}")
+        self._last_meta_update_generation = self.completed_generations
+
+    def get_repair_stats(self) -> Dict[str, Any]:
+        """获取 repair 统计信息。"""
+        return {
+            "total_repair_llm_calls": self.total_repair_llm_calls,
+            "total_repair_evals": self.total_repair_evals,
+            "total_repair_cost": self.total_repair_cost,
+            "total_semantic_repair_llm_calls": self.total_semantic_repair_llm_calls,
+            "total_semantic_repair_evals": self.total_semantic_repair_evals,
+            "total_semantic_repair_cost": self.total_semantic_repair_cost,
+            "total_semantic_repair_successes": self.total_semantic_repair_successes,
+            "failure_buffer_stats": self.failure_buffer.get_stats(),
+        }
+
+    # =========================================================================
+    # 终止逻辑
+    # =========================================================================
+
+    def _generation_llm_api_calls(self) -> int:
+        """Return generation-side raw LLM API calls across all generator clients."""
+        calls = int(getattr(self.llm, "total_calls", 0) or 0)
+        patch_llm = getattr(self, "patch_llm", None)
+        if patch_llm is not None and patch_llm is not self.llm:
+            calls += int(getattr(patch_llm, "total_calls", 0) or 0)
+        return calls
+
+    def _sync_generation_llm_budget_caps(self) -> None:
+        """Dynamically cap generator clients so internal retries can't overshoot `max_llm_calls`.
+
+        Why do this?
+        - `LLMClient.query()` increments `total_calls` per retry attempt.
+        - With multiple generation-side clients (main + patch override), we must enforce a *global*
+          `max_llm_calls` without letting either client independently consume the full budget.
+        """
+        cap = getattr(self.termination_config, "max_llm_calls", None)
+        if cap is None:
+            return
+
+        seedbank_debits = int(getattr(self, "seedbank_debited_calls", 0) or 0)
+        base_calls = int(getattr(self.llm, "total_calls", 0) or 0)
+
+        patch_llm = getattr(self, "patch_llm", None)
+        patch_calls = 0
+        if patch_llm is not None and patch_llm is not self.llm:
+            patch_calls = int(getattr(patch_llm, "total_calls", 0) or 0)
+
+        used = base_calls + patch_calls + seedbank_debits
+        remaining = max(0, int(cap) - int(used))
+
+        # Cap each client to allow at most `remaining` additional calls from *this point*.
+        try:
+            if hasattr(self.llm, "max_total_calls"):
+                self.llm.max_total_calls = int(base_calls) + int(remaining)
+        except Exception:
+            pass
+
+        if patch_llm is not None and patch_llm is not self.llm:
+            try:
+                if hasattr(patch_llm, "max_total_calls"):
+                    patch_llm.max_total_calls = int(patch_calls) + int(remaining)
+            except Exception:
+                pass
+
+    def _check_budget_exhausted(self) -> Optional[str]:
+        """
+        检查是否预算耗尽（硬停）。
+
+        返回触发原因（如果耗尽），否则返回 None。
+
+        预算语义（统一口径）：
+        - max_llm_calls：生成侧 LLM 原始调用次数（`self.llm.total_calls` 等，包含内部重试）
+        - max_evals：评估侧“有效评估次数”（db 入库数 + repair evals）
+        """
+        tc = self.termination_config
+
+        # Keep the internal retry logic honest: update per-client caps based on *global* remaining budget.
+        try:
+            self._sync_generation_llm_budget_caps()
+        except Exception:
+            pass
+
+        raw_llm_api_calls = int(self._generation_llm_api_calls())
+        budget_calls = raw_llm_api_calls + int(getattr(self, "seedbank_debited_calls", 0) or 0)
+
+        # 检查生成侧 LLM 调用次数（raw）
+        if tc.max_llm_calls is not None:
+            if budget_calls >= tc.max_llm_calls:
+                return f"max_llm_calls_reached ({budget_calls} >= {tc.max_llm_calls})"
+
+        # 检查评估次数（有效评估次数）
+        if tc.max_evals is not None:
+            total_effective_evals = (
+                len(self.db.get_all_programs())
+                + int(getattr(self, "total_repair_evals", 0) or 0)
+                + int(getattr(self, "total_semantic_repair_evals", 0) or 0)
+            )
+            if total_effective_evals >= tc.max_evals:
+                return f"max_evals_reached ({total_effective_evals} >= {tc.max_evals})"
+
+        # 检查运行时间
+        if tc.max_time_seconds is not None:
+            elapsed = time.time() - self.start_time
+            if elapsed >= tc.max_time_seconds:
+                return f"max_time_reached ({elapsed:.1f}s >= {tc.max_time_seconds}s)"
+
+        return None
+
+    def _check_exploration_stagnation(self, current_best_tuple: tuple) -> bool:
+        """
+        检查是否探索停滞（软停）。
+
+        返回 True 表示停滞。
+        """
+        # `stagnation_generations <= 0` is treated as "disable stagnation early-stop".
+        # This matches typical experiment naming like `__nostag__`.
+        if int(self.termination_config.stagnation_generations or 0) <= 0:
+            if self.best_fitness_tuple is None or current_best_tuple > self.best_fitness_tuple:
+                self.best_fitness_tuple = current_best_tuple
+                self.generations_without_improvement = 0
+            else:
+                self.generations_without_improvement += 1
+            return False
+
+        if self.best_fitness_tuple is None:
+            self.best_fitness_tuple = current_best_tuple
+            self.generations_without_improvement = 0
+            return False
+
+        # 词典序比较
+        if current_best_tuple > self.best_fitness_tuple:
+            # 有改进！
+            self.best_fitness_tuple = current_best_tuple
+            self.generations_without_improvement = 0
+            return False
+        else:
+            # 无改进
+            self.generations_without_improvement += 1
+            if self.generations_without_improvement >= self.termination_config.stagnation_generations:
+                return True
+            return False
+
+    def _perform_soft_reset(self):
+        """
+        执行软重置。
+
+        【当前实现状态】
+        目前此方法仅记录停滞事件和重置计数器，尚未实际调整搜索参数。
+
+        【设计意图（尚未实现）】
+        当探索停滞时，可以通过调整参数来"重启"搜索：
+        1. 提高温度 → 增加多样性
+        2. 提高 crossover 概率 → 增加组合探索
+
+        【TODO】
+        后续版本可以在此处添加实际的参数调整逻辑，例如：
+        - 修改 self.llm.get_kwargs()["temperature"]
+        - 修改 self.evo_config.patch_type_probs
+        """
+        self.soft_resets_count += 1
+        tc = self.termination_config
+
+        logger.info(f"[SoftReset] Performing soft reset #{self.soft_resets_count}")
+        logger.info(f"  Temperature boost (配置值，尚未应用): +{tc.reset_temperature_boost}")
+        logger.info(f"  Crossover boost (配置值，尚未应用): +{tc.reset_crossover_boost}")
+        # Apply diversity pressure by boosting parent usage penalty.
+        try:
+            old_alpha = float(getattr(self.db_config, "parent_usage_penalty_alpha", 0.0) or 0.0)
+        except Exception:
+            old_alpha = 0.0
+        new_alpha = min(old_alpha + float(tc.reset_parent_usage_penalty_boost), float(tc.reset_parent_usage_penalty_max))
+        setattr(self.db_config, "parent_usage_penalty_alpha", new_alpha)
+        logger.info(f"  Parent usage penalty alpha: {old_alpha:.3f} -> {new_alpha:.3f}")
+
+        # 重置停滞计数器
+        self.generations_without_improvement = 0
+
+    def _save_termination_log(self) -> Dict[str, Any]:
+        """保存终止日志。"""
+        # Generation-side call accounting:
+        # - raw_llm_api_calls: actual HTTP calls made by the generator (incl. retries)
+        # - seedbank_debited_calls: synthetic debits for seedbank reuse fairness
+        # - total_budget_calls: budget-facing number (raw + debits)
+        raw_llm_api_calls = int(getattr(self.llm, "total_calls", 0) or 0)
+        seedbank_debited_calls = int(self.seedbank_debited_calls or 0)
+        total_budget_calls = raw_llm_api_calls + seedbank_debited_calls
+        # 评估侧“有效评估次数”：用于单独汇报评估开销
+        total_effective_evals = (
+            len(self.db.get_all_programs())
+            + int(getattr(self, "total_repair_evals", 0) or 0)
+            + int(getattr(self, "total_semantic_repair_evals", 0) or 0)
+        )
+        no_llm_flag = str(self.problem_config.get("no_llm", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        }
+        # Aggregate optional novelty/embedding stats (kept out of main LLM budget).
+        total_embed_cost = 0.0
+        total_novelty_checks = 0
+        total_novelty_cost = 0.0
+        try:
+            for p in self.db.get_all_programs():
+                meta = p.metadata or {}
+                total_embed_cost += float(meta.get("embed_cost", 0.0) or 0.0)
+                total_novelty_checks += int(meta.get("novelty_checks_performed", 0) or 0)
+                total_novelty_cost += float(meta.get("novelty_cost", 0.0) or 0.0)
+        except Exception:
+            pass
+
+        # Baseline(batchN) sample completeness audit (supports "fill holes" and post-mortem debugging).
+        batchn_expected = None
+        batchn_completed = None
+        batchn_missing_ranges = None
+        if str(getattr(self, "baseline_mode", "") or "").strip() == "batchN":
+            try:
+                batchn_expected = int(getattr(self.repair_config, "num_init_candidates_gen0", 0) or 0)
+                base_dir = Path(self.results_dir) / "baseline_batchN"
+                missing: List[int] = []
+                completed = 0
+                for i in range(max(0, batchn_expected)):
+                    m = base_dir / f"sample_{i}" / "results" / "metrics.json"
+                    if m.exists() and m.stat().st_size > 0:
+                        completed += 1
+                    else:
+                        missing.append(i)
+                batchn_completed = int(completed)
+                if missing:
+                    ranges: List[List[int]] = []
+                    start = prev = missing[0]
+                    for x in missing[1:]:
+                        if x == prev + 1:
+                            prev = x
+                            continue
+                        ranges.append([int(start), int(prev)])
+                        start = prev = x
+                    ranges.append([int(start), int(prev)])
+                    batchn_missing_ranges = ranges
+                else:
+                    batchn_missing_ranges = []
+            except Exception:
+                batchn_expected = None
+                batchn_completed = None
+                batchn_missing_ranges = None
+
+        log_data = {
+            "failure_type": self._classify_failure_type(),
+            "trigger_reason": self.termination_reason or "normal_completion",
+            "baseline_mode": self.baseline_mode,
+            "seed": self.problem_config.get("seed", None),
+            "soft_resets_count": self.soft_resets_count,
+            "final_best_tuple": list(self.best_fitness_tuple) if self.best_fitness_tuple else None,
+            "llm_mode_requested": self.llm_mode_requested,
+            "llm_mode_effective": self.llm_mode_effective,
+            "llm_unavailable": int(bool(self.llm_unavailable)),
+            "llm_unavailable_reason": self.llm_unavailable_reason,
+            "no_llm": int(no_llm_flag),
+            "openai_llm_base_url": os.environ.get("OPENAI_LLM_BASE_URL", ""),
+            "llm_models": list(getattr(self.evo_config, "llm_models", []) or []),
+            "parent_selection_strategy": getattr(self.db_config, "parent_selection_strategy", None),
+            "cycle_softmax_temperature": getattr(self.db_config, "cycle_softmax_temperature", None),
+            "num_archive_inspirations": getattr(self.db_config, "num_archive_inspirations", None),
+            "num_top_k_inspirations": getattr(self.db_config, "num_top_k_inspirations", None),
+            "patch_types": list(getattr(self.evo_config, "patch_types", []) or []),
+            "patch_type_probs": list(getattr(self.evo_config, "patch_type_probs", []) or []),
+            "novelty_filter_enabled": int(bool(getattr(self.evo_config, "embedding_model", None))),
+            "embedding_model": getattr(self.evo_config, "embedding_model", None),
+            "code_embed_sim_threshold": getattr(self.evo_config, "code_embed_sim_threshold", None),
+            "openai_embed_base_url": os.environ.get("OPENAI_EMBED_BASE_URL", ""),
+            "novelty_llm_base_url": os.environ.get("OPENAI_NOVELTY_LLM_BASE_URL", ""),
+            # 主预算：生成侧 raw 调用次数（包含内部重试）
+            "total_budget_calls": int(total_budget_calls),
+            "total_llm_calls": int(total_budget_calls),
+            # Diagnostics: split actual vs debited calls.
+            "raw_llm_api_calls": int(raw_llm_api_calls),
+            "seedbank_debited_calls": int(seedbank_debited_calls),
+            "total_patch_llm_calls": max(
+                int(raw_llm_api_calls)
+                - int(getattr(self, "total_repair_llm_calls", 0) or 0)
+                - int(getattr(self, "total_semantic_repair_llm_calls", 0) or 0),
+                0,
+            ),
+            "total_repair_llm_calls": self.total_repair_llm_calls,
+            "total_semantic_repair_llm_calls": self.total_semantic_repair_llm_calls,
+            "total_evals": len(self.db.get_all_programs()),
+            "total_effective_evals": int(total_effective_evals),
+            "total_repair_evals": self.total_repair_evals,
+            "total_semantic_repair_evals": self.total_semantic_repair_evals,
+            "total_embed_cost": total_embed_cost,
+            "total_novelty_checks_performed": total_novelty_checks,
+            "total_novelty_cost": total_novelty_cost,
+            # Baseline(batchN) audit fields (None for non-baselines)
+            "batchN_expected_samples": batchn_expected,
+            "batchN_completed_samples": batchn_completed,
+            "batchN_missing_ranges": batchn_missing_ranges,
+            "repair_attempts": sum(r.repair_attempts for r in self.failure_buffer.records),
+            "repair_successes": sum(1 for r in self.failure_buffer.records if r.final_status == "repair_success"),
+            "semantic_repair_enabled": int(bool(self.semantic_repair_enabled)),
+            "semantic_repair_successes": int(self.total_semantic_repair_successes),
+            "elapsed_time_seconds": time.time() - self.start_time,
+            "generations_completed": self.completed_generations,
+        }
+
+        log_path = Path(self.results_dir) / "termination_log.json"
+        with open(log_path, "w") as f:
+            json.dump(log_data, f, indent=2)
+
+        logger.info(f"[Termination] Log saved to {log_path}")
+        return log_data
+
+    def _classify_failure_type(self) -> str:
+        """根据终止原因分类失败类型。"""
+        if self.termination_reason is None:
+            return "normal_completion"
+        elif "max_llm_calls" in self.termination_reason or \
+             "max_evals" in self.termination_reason or \
+             "max_time" in self.termination_reason:
+            return "budget_exhausted"
+        elif "stagnation" in self.termination_reason:
+            return "exploration_stagnation"
+        else:
+            return "unknown"
+
+    def _finalize_run(self) -> None:
+        """Finalize run: write summaries, termination log, and stats (shared by baselines & ours)."""
+        # 末尾收尾：Meta summary + 保存最佳程序等（沿用父类逻辑）
+        best_program = self.db.get_best_program()
+        self.meta_summarizer.perform_final_summary(str(self.results_dir), best_program)
+        self._save_meta_memory()
+
+        self.db.print_summary()
+        logger.info(f"Evolution completed! {self.completed_generations} generations")
+        logger.info("=" * 80)
+        end_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        logger.info(f"Evolution run ended at {end_time}")
+        logger.info("=" * 80)
+
+        # 保存终止日志
+        termination_log = self._save_termination_log()
+
+        # 打印统计信息
+        repair_stats = self.get_repair_stats()
+        logger.info("=" * 60)
+        logger.info("Repair Statistics (规约 v1.1 约束 C):")
+        logger.info(f"  Total repair LLM calls: {repair_stats['total_repair_llm_calls']}")
+        logger.info(f"  Total repair evals: {repair_stats['total_repair_evals']}")
+        logger.info(f"  Total repair cost: ${repair_stats['total_repair_cost']:.4f}")
+        logger.info(f"  Total semantic repair LLM calls: {repair_stats['total_semantic_repair_llm_calls']}")
+        logger.info(f"  Total semantic repair evals: {repair_stats['total_semantic_repair_evals']}")
+        logger.info(f"  Total semantic repair successes: {repair_stats['total_semantic_repair_successes']}")
+        logger.info(f"  Total semantic repair cost: ${repair_stats['total_semantic_repair_cost']:.4f}")
+        logger.info(f"  Failure buffer: {repair_stats['failure_buffer_stats']}")
+        logger.info("=" * 60)
+        logger.info("Termination Log:")
+        logger.info(f"  Failure type: {termination_log['failure_type']}")
+        logger.info(f"  Trigger reason: {termination_log['trigger_reason']}")
+        logger.info(f"  Soft resets: {termination_log['soft_resets_count']}")
+        logger.info(f"  Final best tuple: {termination_log['final_best_tuple']}")
+        logger.info("=" * 60)
+
+    def _run_baseline_batchN(self) -> None:
+        """Baseline: batchN independent initial samples + compile-repair (no archive/parent/inspirations/cross)."""
+        num_samples = int(getattr(self.repair_config, "num_init_candidates_gen0", 0) or 0)
+        if num_samples <= 0:
+            raise ValueError("batchN requires num_init_candidates_gen0 > 0")
+
+        base_dir = Path(self.results_dir) / "baseline_batchN"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"[Baseline batchN] Generating {num_samples} independent samples")
+
+        for sample_idx in range(num_samples):
+            budget_reason = self._check_budget_exhausted()
+            if budget_reason is not None:
+                self.termination_reason = budget_reason
+                logger.info(f"[Baseline batchN] Budget exhausted: {budget_reason}")
+                break
+
+            sample_dir = base_dir / f"sample_{sample_idx}"
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            exec_fname = str(sample_dir / f"main.{self.lang_ext}")
+            results_dir = str(sample_dir / "results")
+            Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+            # Resume/repair-friendly behavior:
+            # - If this sample has already been evaluated (metrics.json exists), do NOT overwrite it.
+            #   This enables "fill holes" after transient service disconnects without corrupting
+            #   already-finished samples.
+            metrics_path = Path(results_dir) / "metrics.json"
+            if metrics_path.exists() and metrics_path.stat().st_size > 0:
+                continue
+
+            # --- Generate initial statement (independent) ---
+            # IMPORTANT: transient LLM/Lean/Critic service disconnects must not create "empty samples".
+            # We retry generation for the SAME sample_idx until it succeeds (or a global termination
+            # condition such as max_time_seconds triggers), so we end up with exactly `num_samples`
+            # evaluated sample folders.
+            before_calls = getattr(self.llm, "total_calls", None)
+            api_costs = 0.0
+            max_gen_retries = _env_int("AUTOFORMAL_BASELINE_BATCHN_GEN_MAX_RETRIES")
+            retry_backoff_s = _env_float("AUTOFORMAL_BASELINE_BATCHN_GEN_RETRY_BACKOFF_S", 0.8)
+            retry_backoff_cap_s = _env_float("AUTOFORMAL_BASELINE_BATCHN_GEN_RETRY_BACKOFF_CAP_S", 20.0)
+            gen_attempt = 0
+            initial_code = None
+            patch_name = ""
+            patch_description = ""
+            while True:
+                budget_reason = self._check_budget_exhausted()
+                if budget_reason is not None:
+                    self.termination_reason = budget_reason
+                    logger.info(f"[Baseline batchN] Budget exhausted: {budget_reason}")
+                    break
+                try:
+                    initial_code, patch_name, patch_description, api_costs_one = (
+                        self.generate_initial_program()
+                    )
+                    try:
+                        api_costs += float(api_costs_one or 0.0)
+                    except Exception:
+                        pass
+                    break
+                except Exception as e:
+                    gen_attempt += 1
+                    logger.warning(
+                        f"[Baseline batchN] Sample {sample_idx} generation failed "
+                        f"(attempt {gen_attempt}{'' if max_gen_retries is None else f'/{max_gen_retries}'}): {e}"
+                    )
+                    if max_gen_retries is not None and gen_attempt >= int(max_gen_retries):
+                        # Hard-stop: do not silently produce incomplete sample sets.
+                        self.termination_reason = (
+                            f"baseline_generation_failed (sample={sample_idx}, attempts={gen_attempt})"
+                        )
+                        self._add_to_failure_buffer(
+                            program_id=str(uuid.uuid4()),
+                            generation=0,
+                            compile_error_type="baseline_generation_failed",
+                            compile_error_msg=str(e),
+                            statement="",
+                            repair_attempts=0,
+                            repair_llm_calls_used=0,
+                            final_status="patch_failed",
+                        )
+                        logger.error(f"[Baseline batchN] {self.termination_reason}")
+                        break
+                    # Exponential backoff helps during brief service outages.
+                    sleep_s = min(float(retry_backoff_cap_s), float(retry_backoff_s) * (2 ** min(gen_attempt - 1, 6)))
+                    time.sleep(max(0.0, sleep_s))
+                    continue
+
+            if initial_code is None:
+                # Generation did not succeed; exit the baseline loop so the run is clearly marked as incomplete.
+                break
+
+            after_calls = getattr(self.llm, "total_calls", None)
+            gen_calls_used = None
+            if isinstance(before_calls, int) and isinstance(after_calls, int):
+                gen_calls_used = max(after_calls - before_calls, 0)
+
+            Path(exec_fname).write_text(initial_code, encoding="utf-8")
+
+            # --- Evaluate ---
+            results, rtime = self.scheduler.run(exec_fname, results_dir)
+
+            try:
+                evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
+            except Exception:
+                evaluated_code = ""
+
+            metrics_val = results.get("metrics", {}) if results else {}
+            compile_ok = int(metrics_val.get("compile_ok", 0) or 0)
+            compile_error_type = str(metrics_val.get("compile_error_type", "") or "")
+            compile_error_msg = str(metrics_val.get("compile_error_msg", "") or "")
+            statement = str(metrics_val.get("statement", "") or "")
+            stdout_log = results.get("stdout_log", "") if results else ""
+            stderr_log = results.get("stderr_log", "") if results else ""
+
+            combined_score = float(metrics_val.get("combined_score", 0.0) or 0.0)
+            public_metrics = metrics_val.get("public", {}) or {}
+            private_metrics = metrics_val.get("private", {}) or {}
+            text_feedback = metrics_val.get("text_feedback", "") or ""
+
+            pre_program_id = str(uuid.uuid4())
+            code_embedding, e_cost = self.get_code_embedding(exec_fname)
+
+            pre_state_role = "pre_post" if compile_ok == 1 else "pre"
+            pre_program = Program(
+                id=pre_program_id,
+                code=evaluated_code,
+                language=self.evo_config.language,
+                parent_id=None,
+                generation=0,
+                archive_inspiration_ids=[],
+                top_k_inspiration_ids=[],
+                code_diff=None,
+                embedding=code_embedding,
+                correct=(compile_ok == 1),
+                combined_score=combined_score,
+                public_metrics=public_metrics,
+                private_metrics=private_metrics,
+                text_feedback=text_feedback,
+                metadata={
+                    "compute_time": rtime,
+                    "api_costs": api_costs,
+                    "embed_cost": e_cost,
+                    "novelty_cost": 0.0,
+                    "patch_type": "baseline_init",
+                    "patch_name": patch_name,
+                    "patch_description": patch_description,
+                    "stdout_log": stdout_log,
+                    "stderr_log": stderr_log,
+                # fitness_tuple order: (compile_ok, beq_ok, semantic_ok, cycle_score)
+                "fitness_tuple": list(metrics_val.get("fitness_tuple", (compile_ok, 0, 0, 0.0))),
+                    "cycle_log_prob": metrics_val.get("cycle_log_prob", None),
+                    "cycle_normalized_log_prob": metrics_val.get("cycle_normalized_log_prob", None),
+                    "cycle_score": metrics_val.get("cycle_score", None),
+                    # --- baseline audit fields ---
+                    "baseline_mode": "batchN",
+                    "sample_id": int(sample_idx),
+                    "step_idx": 0,
+                    "prev_step_id": None,
+                    "state_role": pre_state_role,
+                    "llm_calls_used": gen_calls_used,
+                    "compile_error_type": compile_error_type,
+                    "compile_error_msg": compile_error_msg,
+                },
+            )
+            self.db.add(pre_program, verbose=True)
+            self.db.save()
+
+            if compile_ok == 1:
+                # Optional semantic repair (opt-in): only when semantic judge is enabled and the
+                # current candidate is compile_ok=1 but semantic_ok=0.
+                if self.semantic_repair_enabled:
+                    try:
+                        sem_ok = int(public_metrics.get("semantic_ok", 0) or 0)
+                    except Exception:
+                        sem_ok = 0
+                    if sem_ok == 0:
+                        base_job = RunningJob(
+                            job_id=f"baseline_batchN_pre_{sample_idx}",
+                            exec_fname=exec_fname,
+                            results_dir=results_dir,
+                            start_time=time.time(),
+                            generation=0,
+                            parent_id=None,
+                            archive_insp_ids=[],
+                            top_k_insp_ids=[],
+                            code_diff=None,
+                            meta_patch_data={
+                                "baseline_mode": "batchN",
+                                "sample_id": int(sample_idx),
+                                "pre_program_id": pre_program_id,
+                                "step_idx": 0,
+                                "prev_step_id": None,
+                                "state_role": pre_state_role,
+                            },
+                        )
+                        self._process_semantic_repair(
+                            base_program=pre_program,
+                            base_job=base_job,
+                            base_metrics=metrics_val,
+                            evaluated_code=evaluated_code,
+                        )
+                continue
+
+            # --- Compile repair (optional) ---
+            if not self.repair_config.enabled:
+                self._add_to_failure_buffer(
+                    program_id=pre_program_id,
+                    generation=0,
+                    compile_error_type=compile_error_type,
+                    compile_error_msg=compile_error_msg,
+                    statement=statement,
+                    repair_attempts=0,
+                    repair_llm_calls_used=0,
+                    final_status="no_repair",
+                )
+                continue
+
+            dummy_job = RunningJob(
+                job_id=f"baseline_batchN_{sample_idx}",
+                exec_fname=exec_fname,
+                results_dir=results_dir,
+                start_time=time.time(),
+                generation=0,
+                parent_id=None,
+                archive_insp_ids=[],
+                top_k_insp_ids=[],
+                code_diff=None,
+                meta_patch_data={
+                    "baseline_mode": "batchN",
+                    "sample_id": int(sample_idx),
+                    "pre_program_id": pre_program_id,
+                    "step_idx": 1,
+                    "prev_step_id": pre_program_id,
+                    "state_role": "post",
+                },
+            )
+            repair_item = RepairQueueItem(
+                program_id=pre_program_id,
+                exec_fname=exec_fname,
+                results_dir=results_dir,
+                generation=0,
+                parent_id=pre_program_id,
+                compile_error_type=compile_error_type,
+                compile_error_msg=compile_error_msg,
+                original_code=str(metrics_val.get("code") or evaluated_code or statement or ""),
+                repair_attempts=0,
+            )
+            repaired_program = self._process_repair(repair_item, dummy_job)
+
+            # Optional semantic repair after successful compile-repair.
+            if repaired_program is not None and self.semantic_repair_enabled:
+                try:
+                    pm = repaired_program.public_metrics or {}
+                    sem_ok = int(pm.get("semantic_ok", 0) or 0)
+                    comp_ok = int(pm.get("compile_ok", 0) or 0)
+                except Exception:
+                    sem_ok = 0
+                    comp_ok = 0
+                if comp_ok == 1 and sem_ok == 0:
+                    base_metrics = _read_metrics_json(results_dir)
+                    self._process_semantic_repair(
+                        base_program=repaired_program,
+                        base_job=dummy_job,
+                        base_metrics=base_metrics,
+                        evaluated_code=str(repaired_program.code or ""),
+                    )
+
+    def _run_baseline_repairloop1(self) -> None:
+        """Baseline: single repair trajectory (compile-only correction, no archive/selection/inspirations)."""
+        trajectory_id = str(uuid.uuid4())
+        base_dir = Path(self.results_dir) / "baseline_repairloop1" / f"trajectory_{trajectory_id}"
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        max_attempts = int(getattr(self.repair_config, "max_repair_attempts_gen0", 0) or 0)
+        max_attempts = max(max_attempts, 0)
+        logger.info(f"[Baseline repairloop1] trajectory={trajectory_id}, max_attempts={max_attempts}")
+
+        # Step 0: generate (or use file if present)
+        step_idx = 0
+        step_dir = base_dir / f"step_{step_idx}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        exec_fname = str(step_dir / f"main.{self.lang_ext}")
+        results_dir = str(step_dir / "results")
+        Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+        before_calls = getattr(self.llm, "total_calls", None)
+        api_costs = 0.0
+        patch_name = "baseline_initial"
+        patch_description = "Baseline repairloop1 initial sample."
+
+        if self.evo_config.init_program_path:
+            try:
+                shutil.copy(self.evo_config.init_program_path, exec_fname)
+                patch_description = f"Baseline initial from file: {self.evo_config.init_program_path}"
+            except Exception:
+                self.evo_config.init_program_path = None
+
+        if not self.evo_config.init_program_path:
+            try:
+                initial_code, patch_name, patch_description, api_costs = self.generate_initial_program()
+                Path(exec_fname).write_text(initial_code, encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"[Baseline repairloop1] Initial generation failed: {e}")
+                self._add_to_failure_buffer(
+                    program_id=str(uuid.uuid4()),
+                    generation=0,
+                    compile_error_type="baseline_generation_failed",
+                    compile_error_msg=str(e),
+                    statement="",
+                    repair_attempts=0,
+                    repair_llm_calls_used=0,
+                    final_status="patch_failed",
+                )
+                self.termination_reason = "baseline_generation_failed"
+                return
+
+        after_calls = getattr(self.llm, "total_calls", None)
+        gen_calls_used = None
+        if isinstance(before_calls, int) and isinstance(after_calls, int):
+            gen_calls_used = max(after_calls - before_calls, 0)
+
+        results, rtime = self.scheduler.run(exec_fname, results_dir)
+        try:
+            evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
+        except Exception:
+            evaluated_code = ""
+
+        metrics_val = results.get("metrics", {}) if results else {}
+        compile_ok = int(metrics_val.get("compile_ok", 0) or 0)
+        compile_error_type = str(metrics_val.get("compile_error_type", "") or "")
+        compile_error_msg = str(metrics_val.get("compile_error_msg", "") or "")
+        statement = str(metrics_val.get("statement", "") or "")
+
+        combined_score = float(metrics_val.get("combined_score", 0.0) or 0.0)
+        public_metrics = metrics_val.get("public", {}) or {}
+        private_metrics = metrics_val.get("private", {}) or {}
+        text_feedback = metrics_val.get("text_feedback", "") or ""
+        stdout_log = results.get("stdout_log", "") if results else ""
+        stderr_log = results.get("stderr_log", "") if results else ""
+
+        code_embedding, e_cost = self.get_code_embedding(exec_fname)
+        prev_program_id: Optional[str] = None
+        program_id = str(uuid.uuid4())
+        prev_program_id = program_id
+
+        pre_state_role = "pre_post" if compile_ok == 1 else "pre"
+        self.db.add(
+            Program(
+                id=program_id,
+                code=evaluated_code,
+                language=self.evo_config.language,
+                parent_id=None,
+                generation=0,
+                archive_inspiration_ids=[],
+                top_k_inspiration_ids=[],
+                code_diff=None,
+                embedding=code_embedding,
+                correct=(compile_ok == 1),
+                combined_score=combined_score,
+                public_metrics=public_metrics,
+                private_metrics=private_metrics,
+                text_feedback=text_feedback,
+                metadata={
+                    "compute_time": rtime,
+                    "api_costs": api_costs,
+                    "embed_cost": e_cost,
+                    "novelty_cost": 0.0,
+                    "patch_type": "baseline_init",
+                    "patch_name": patch_name,
+                    "patch_description": patch_description,
+                    "stdout_log": stdout_log,
+                    "stderr_log": stderr_log,
+                # fitness_tuple order: (compile_ok, beq_ok, semantic_ok, cycle_score)
+                "fitness_tuple": list(metrics_val.get("fitness_tuple", (compile_ok, 0, 0, 0.0))),
+                    "cycle_log_prob": metrics_val.get("cycle_log_prob", None),
+                    "cycle_normalized_log_prob": metrics_val.get("cycle_normalized_log_prob", None),
+                    "cycle_score": metrics_val.get("cycle_score", None),
+                    # --- baseline audit fields ---
+                    "baseline_mode": "repairloop1",
+                    "trajectory_id": trajectory_id,
+                    "step_idx": 0,
+                    "prev_step_id": None,
+                    "state_role": pre_state_role,
+                    "llm_calls_used": gen_calls_used,
+                    "compile_error_type": compile_error_type,
+                    "compile_error_msg": compile_error_msg,
+                },
+            ),
+            verbose=True,
+        )
+        self.db.save()
+
+        if compile_ok == 1 or not self.repair_config.enabled:
+            if compile_ok == 0 and not self.repair_config.enabled:
+                self._add_to_failure_buffer(
+                    program_id=program_id,
+                    generation=0,
+                    compile_error_type=compile_error_type,
+                    compile_error_msg=compile_error_msg,
+                    statement=statement,
+                    repair_attempts=0,
+                    repair_llm_calls_used=0,
+                    final_status="no_repair",
+                )
+            return
+
+        # Repair attempts (record every step into DB)
+        current_code = str(metrics_val.get("code") or normalize_lean_code(evaluated_code) or evaluated_code or "")
+        current_error_type = compile_error_type
+        current_error_msg = compile_error_msg
+
+        for attempt in range(max_attempts):
+            budget_reason = self._check_budget_exhausted()
+            if budget_reason is not None:
+                self.termination_reason = budget_reason
+                logger.info(f"[Baseline repairloop1] Budget exhausted: {budget_reason}")
+                break
+
+            step_idx = attempt + 1
+            step_dir = base_dir / f"step_{step_idx}"
+            step_dir.mkdir(parents=True, exist_ok=True)
+            exec_fname = str(step_dir / f"main.{self.lang_ext}")
+            results_dir = str(step_dir / "results")
+            Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+            sys_msg, user_msg = build_repair_prompt(
+                original_code=current_code,
+                compile_error_type=current_error_type,
+                compile_error_msg=current_error_msg,
+                informal=self.problem_config.get("informal", ""),
+                reference_header=self.problem_config.get("header", ""),
+            )
+            llm_kwargs = self.llm.get_kwargs()
+            llm_kwargs["temperature"] = self.repair_config.repair_temperature
+
+            repair_llm = self._repair_llm_override()
+            before_calls = getattr(self.llm, "total_calls", None)
+            response = None
+            llm_kwargs_eff = dict(llm_kwargs or {})
+            try:
+                if repair_llm.get("enabled"):
+                    logger.info(
+                        f"[Baseline repairloop1] Using repair-only LLM override: "
+                        f"model={repair_llm.get('model_name','')}, "
+                        f"base_url={repair_llm.get('base_url','')}"
+                    )
+                    llm_kwargs_eff["model_name"] = str(repair_llm.get("model_name") or "")
+                    with _temporary_env({"OPENAI_LLM_BASE_URL": str(repair_llm.get("base_url") or "")}):
+                        response = self.llm.query(msg=user_msg, system_msg=sys_msg, llm_kwargs=llm_kwargs_eff)
+                else:
+                    response = self.llm.query(msg=user_msg, system_msg=sys_msg, llm_kwargs=llm_kwargs_eff)
+            except Exception as e:
+                logger.warning(
+                    f"[Baseline repairloop1] LLM query failed at attempt {attempt + 1}: {type(e).__name__}: {e}"
+                )
+                response = None
+            after_calls = getattr(self.llm, "total_calls", None)
+            calls_used = None
+            if isinstance(before_calls, int) and isinstance(after_calls, int):
+                calls_used = max(after_calls - before_calls, 0)
+
+            # Track global repair budget (constraint C)
+            self.total_repair_llm_calls += (calls_used if calls_used is not None and calls_used > 0 else 1)
+            resp_cost = float(getattr(response, "cost", 0.0) or 0.0)
+            self.total_repair_cost += resp_cost
+
+            repaired_code = extract_between(
+                (getattr(response, "content", "") or ""),
+                f"```{self.evo_config.language}",
+                "```",
+                False,
+            )
+            INVALID_EXTRACT_RESULTS = {None, "none", "null", "nil", ""}
+            if repaired_code in INVALID_EXTRACT_RESULTS or (
+                isinstance(repaired_code, str)
+                and repaired_code.strip().lower() in {"none", "null", "nil", ""}
+            ):
+                repaired_code = None
+            if not repaired_code:
+                model_name = (
+                    str(getattr(response, "model_name", "") or "").strip()
+                    or str(repair_llm.get("model_name") or "").strip()
+                    or (self.evo_config.llm_models[0] if self.evo_config.llm_models else "")
+                )
+                adapter = get_model_adapter(model_name)
+                if adapter:
+                    parsed_stmt = adapter.parse_output((getattr(response, "content", "") or ""))
+                    if parsed_stmt:
+                        repaired_code = parsed_stmt
+
+            repaired_code_norm = normalize_lean_code(repaired_code or "")
+            if not repaired_code_norm:
+                continue
+
+            repaired_program = self._build_repaired_program(repaired_code_norm)
+            Path(exec_fname).write_text(repaired_program, encoding="utf-8")
+
+            # Evaluate repaired program (counts toward eval budget)
+            self.total_repair_evals += 1
+            results, rtime = self.scheduler.run(exec_fname, results_dir)
+
+            metrics_val = results.get("metrics", {}) if results else {}
+            compile_ok = int(metrics_val.get("compile_ok", 0) or 0)
+            current_error_type = str(metrics_val.get("compile_error_type", "") or "")
+            current_error_msg = str(metrics_val.get("compile_error_msg", "") or "")
+            current_code = str(metrics_val.get("code") or repaired_code_norm or "")
+
+            combined_score = float(metrics_val.get("combined_score", 0.0) or 0.0)
+            public_metrics = metrics_val.get("public", {}) or {}
+            private_metrics = metrics_val.get("private", {}) or {}
+            text_feedback = metrics_val.get("text_feedback", "") or ""
+            stdout_log = results.get("stdout_log", "") if results else ""
+            stderr_log = results.get("stderr_log", "") if results else ""
+
+            code_embedding, e_cost = self.get_code_embedding(exec_fname)
+            new_program_id = str(uuid.uuid4())
+
+            state_role = "post" if compile_ok == 1 else "intermediate"
+            self.db.add(
+                Program(
+                    id=new_program_id,
+                    code=repaired_program,
+                    language=self.evo_config.language,
+                    parent_id=prev_program_id,
+                    generation=0,
+                    archive_inspiration_ids=[],
+                    top_k_inspiration_ids=[],
+                    code_diff=None,
+                    embedding=code_embedding,
+                    correct=(compile_ok == 1),
+                    combined_score=combined_score,
+                    public_metrics=public_metrics,
+                    private_metrics=private_metrics,
+                    text_feedback=text_feedback,
+                    metadata={
+                        "compute_time": rtime,
+                        "embed_cost": e_cost,
+                        "repair_attempt": step_idx,
+                        "repair_cost": resp_cost,
+                        "stdout_log": stdout_log,
+                        "stderr_log": stderr_log,
+                        # fitness_tuple order: (compile_ok, beq_ok, semantic_ok, cycle_score)
+                        "fitness_tuple": list(metrics_val.get("fitness_tuple", (compile_ok, 0, 0, 0.0))),
+                        "cycle_log_prob": metrics_val.get("cycle_log_prob", None),
+                        "cycle_normalized_log_prob": metrics_val.get("cycle_normalized_log_prob", None),
+                        "cycle_score": metrics_val.get("cycle_score", None),
+                        # --- baseline audit fields ---
+                        "baseline_mode": "repairloop1",
+                        "trajectory_id": trajectory_id,
+                        "step_idx": step_idx,
+                        "prev_step_id": prev_program_id,
+                        "state_role": state_role,
+                        "llm_calls_used": calls_used,
+                        "compile_error_type": current_error_type,
+                        "compile_error_msg": current_error_msg,
+                        "repaired": True,
+                    },
+                ),
+                verbose=True,
+            )
+            self.db.save()
+            prev_program_id = new_program_id
+
+            if compile_ok == 1:
+                self._add_to_failure_buffer(
+                    program_id=program_id,
+                    generation=0,
+                    compile_error_type=compile_error_type,
+                    compile_error_msg=compile_error_msg,
+                    statement=statement,
+                    repair_attempts=step_idx,
+                    repair_llm_calls_used=0,
+                    final_status="repair_success",
+                )
+                return
+
+        # Exhausted
+        self._add_to_failure_buffer(
+            program_id=program_id,
+            generation=0,
+            compile_error_type=current_error_type,
+            compile_error_msg=current_error_msg,
+            statement=normalize_lean_statement(current_code) or statement,
+            repair_attempts=max_attempts,
+            repair_llm_calls_used=0,
+            final_status="repair_exhausted",
+        )
+
+    def run(self):
+        """
+        运行进化（带 repair + 预算/停滞检测 + 终止日志）。
+
+        相比父类 run，增加：
+        - 硬停：_check_budget_exhausted
+        - 软停：_check_exploration_stagnation → _perform_soft_reset
+        - 终止原因记录到 termination_log
+        """
+        mode_norm = str(self.baseline_mode or "ours").strip().lower()
+        if mode_norm == "batchn":
+            self._run_baseline_batchN()
+            self.best_fitness_tuple = self._get_current_best_tuple()
+            self._finalize_run()
+            return
+        if mode_norm == "repairloop1":
+            self._run_baseline_repairloop1()
+            self.best_fitness_tuple = self._get_current_best_tuple()
+            self._finalize_run()
+            return
+
+        max_jobs = self.evo_config.max_parallel_jobs
+        target_gens = self.evo_config.num_generations
+        logger.info(
+            f"Starting evolution with {max_jobs} parallel jobs, "
+            f"target: {target_gens} generations (with budget/stagnation checks)"
+        )
+
+        # 先跑第 0 代，填充数据库
+        if self.completed_generations == 0 and target_gens > 0:
+            logger.info("Running generation 0 sequentially to initialize database...")
+            self._run_generation_0()
+            if len(self.db.get_all_programs()) == 0:
+                if self.termination_reason is None:
+                    self.termination_reason = "gen0_no_compile_ok_seed"
+                logger.info(
+                    f"[Termination] Gen0 produced no compile_ok=1 seeds, stopping: {self.termination_reason}"
+                )
+                self._finalize_run()
+                return
+            self.completed_generations = 1
+            self.next_generation_to_submit = 1
+            logger.info(f"Completed generation 0, total: 1/{target_gens}")
+
+        # 主循环（带预算/停滞检测）
+        if self.completed_generations < target_gens:
+            logger.info("Starting parallel execution for remaining generations...")
+
+            while (
+                self.completed_generations < target_gens or len(self.running_jobs) > 0
+            ):
+                # 1) 检查已完成任务
+                completed_jobs = self._check_completed_jobs()
+
+                # 2) 处理已完成任务
+                if completed_jobs:
+                    for job in completed_jobs:
+                        self._process_completed_job(job)
+
+                    # 更新完成代数
+                    self._update_completed_generations()
+
+                    if self.verbose:
+                        logger.info(
+                            f"Processed {len(completed_jobs)} jobs. "
+                            f"Total completed generations: "
+                            f"{self.completed_generations}/{target_gens}"
+                        )
+
+                    # 2.1 停滞检测（基于当前 best_fitness_tuple）
+                    current_best_tuple = self._get_current_best_tuple()
+                    if current_best_tuple is not None:
+                        if self._check_exploration_stagnation(current_best_tuple):
+                            self._perform_soft_reset()
+                            if (
+                                self.soft_resets_count
+                                >= self.termination_config.max_soft_resets
+                            ):
+                                self.termination_reason = (
+                                    "exploration_stagnation_max_soft_resets"
+                                )
+                                logger.info(
+                                    "[Termination] Soft reset limit reached, stopping..."
+                                )
+                                break
+
+                # 3) 预算检测（硬停）
+                budget_reason = self._check_budget_exhausted()
+                if budget_reason is not None:
+                    self.termination_reason = budget_reason
+                    logger.info(f"[Termination] Budget exhausted: {budget_reason}")
+                    break
+
+                # 4) 检查是否已完成全部代数
+                if self.completed_generations >= target_gens:
+                    logger.info("All generations completed, exiting...")
+                    break
+
+                # 5) 继续提交新任务（若队列有空间）
+                if (
+                    len(self.running_jobs) < max_jobs
+                    and self.next_generation_to_submit < target_gens
+                ):
+                    self._submit_new_job()
+
+                time.sleep(2)
+        self._finalize_run()
+
+    def _get_current_best_tuple(self) -> Optional[tuple]:
+        """
+        从数据库中获取当前最佳 fitness_tuple（仅 compile_ok=1 程序）。
+        若不存在返回 None。
+        """
+        best_tuple = None
+        programs = self.db.get_all_programs()
+        for p in programs:
+            meta = p.metadata or {}
+            ft = meta.get("fitness_tuple")
+            if ft is None:
+                continue
+            try:
+                ft_tuple = tuple(ft)
+            except Exception:
+                continue
+            if best_tuple is None or ft_tuple > best_tuple:
+                best_tuple = ft_tuple
+        return best_tuple

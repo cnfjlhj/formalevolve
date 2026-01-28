@@ -1,0 +1,9 @@
+# Core dependencies
+openai>=1.0.0
+
+# For HuggingFace models (optional, but recommended)
+transformers>=4.35.0
+torch>=2.0.0
+
+# For deploying models (optional)
+# vllm>=0.4.0

@@ -1,0 +1,25 @@
+# 针对Kimi API的优化配置
+evo_config:
+  _target_: shinka.core.EvolutionConfig
+  patch_types:
+    - "diff"
+    - "full"
+  patch_type_probs:
+    - 0.7
+    - 0.3
+  num_generations: 10
+  max_parallel_jobs: 1
+  max_patch_resamples: 2
+  max_patch_attempts: 5
+  llm_models:
+    - "claude-sonnet-4-5-20250929"  # 使用Claude模型通过Kimi API
+  llm_dynamic_selection: null
+  llm_kwargs:
+    temperatures:
+      - 0.0
+      - 0.3
+      - 0.7
+    max_tokens: 8192
+  meta_rec_interval: null
+  embedding_model: null
+  results_dir: ${output_dir}

@@ -1,0 +1,7 @@
+{
+  "informal": "\nProve that for any odd natural number n, 8 divides n^2 - 1.\n",
+  "header": "import Mathlib\n\nopen Function Fintype Subgroup Ideal Polynomial Submodule Zsqrtd RingHom\nopen scoped BigOperators",
+  "ground_truth": "\ntheorem odd_sq_sub_one_div_eight (n : ℕ) (hn : Odd n) : 8 ∣ n^2 - 1 := by sorry\n",
+  "use_beq": false,
+  "compile_timeout": 60
+}

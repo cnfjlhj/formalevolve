@@ -1,0 +1,5 @@
+[
+  "theorem my_fixture_1 : True := by sorry",
+  "theorem my_fixture_2 (n : Nat) : n = n := by sorry"
+]
+
