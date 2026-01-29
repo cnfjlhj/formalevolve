@@ -61,17 +61,17 @@ class Candidate:
     - soft_success: compile_ok == True and s_sem == 1
     - strict_success: compile_ok == True and beq_flag == 1
     """
-    code: str                    # Lean4 theorem statement
-    header: str                  # Import header
+    code: str                                             
+    header: str                                 
 
-    # Evaluation results
+                        
     compile_ok: bool = False
     compile_error: Optional[str] = None
-    s_sem: int = 0               # CriticLean score (0 or 1)
-    beq_flag: int = 0            # BEq+ equivalence (0 or 1)
-    critic_raw: str = ""         # Raw CriticLean response
+    s_sem: int = 0                                          
+    beq_flag: int = 0                                       
+    critic_raw: str = ""                                  
 
-    # Metadata
+              
     generation: int = 0
     parent_id: Optional[str] = None
     candidate_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -90,7 +90,7 @@ class Candidate:
         """
         if not self.compile_ok:
             return 0.0
-        # s_sem ∈ {0, 1}, beq_flag ∈ {0, 1}
+                                           
         return float(self.s_sem + lambda_beq * self.beq_flag)
 
     @property
@@ -135,8 +135,8 @@ class EvaluationResult:
     """
     compile_ok: bool
     compile_error: Optional[str]
-    s_sem: int  # 0 or 1
-    beq_flag: int  # 0 or 1
+    s_sem: int          
+    beq_flag: int          
     critic_raw: str
 
     def apply_to(self, candidate: Candidate) -> Candidate:

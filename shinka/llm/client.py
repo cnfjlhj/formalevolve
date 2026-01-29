@@ -36,9 +36,9 @@ def get_client_llm(
     Returns:
         The client and model for the given model name.
     """
-    # print(f"Getting client for model {model_name}")
+                                                     
     if model_name in CLAUDE_MODELS.keys():
-        # Use Kimi API for Claude models
+                                        
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
         client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
@@ -58,8 +58,8 @@ def get_client_llm(
                 client, mode=instructor.mode.Mode.ANTHROPIC_JSON
             )
     elif model_name in OPENAI_MODELS.keys():
-        # Allow separating the OpenAI-compatible base URL for LLM generation
-        # from other OpenAI-compatible services (e.g. embeddings).
+                                                                            
+                                                                  
         llm_base_url = base_url or os.environ.get("OPENAI_LLM_BASE_URL")
         if llm_base_url:
             client = openai.OpenAI(
@@ -71,7 +71,7 @@ def get_client_llm(
         if structured_output:
             client = instructor.from_openai(client, mode=instructor.Mode.TOOLS_STRICT)
     elif model_name.startswith("azure-"):
-        # get rid of the azure- prefix
+                                      
         model_name = model_name.split("azure-")[-1]
         client = openai.AzureOpenAI(
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
@@ -98,7 +98,7 @@ def get_client_llm(
                 mode=instructor.Mode.GEMINI_JSON,
             )
     else:
-        # Fallback: use OpenAI-compatible client for custom models (e.g., vLLM, local models)
+                                                                                             
         llm_base_url = base_url or os.environ.get("OPENAI_LLM_BASE_URL")
         if llm_base_url:
             client = openai.OpenAI(

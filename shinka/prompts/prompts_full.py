@@ -1,11 +1,11 @@
-# Multiple Full Rewrite Prompt Variants
-# 1. Default
-# 2. Different Algorithm
-# 3. Context Motivated
-# 4. Structural Redesign
-# 5. Parametric Design
+                                       
+            
+                        
+                      
+                        
+                      
 
-# Original/Default Full Rewrite
+                               
 FULL_SYS_FORMAT_DEFAULT = """
 Rewrite the program to improve its performance on the specified metrics.
 Provide the complete new program code.
@@ -30,7 +30,7 @@ A description and argumentation process of the code you are proposing.
 * Make sure the file still runs after your changes.
 * Use the <NAME>, <DESCRIPTION>, and <CODE> delimiters to structure your response. It will be parsed afterwards."""
 
-# Variant 1: Completely Different Algorithm
+                                           
 FULL_SYS_FORMAT_DIFFERENT = """
 Design a completely different algorithm approach to solve the same problem.
 Ignore the current implementation and think of alternative algorithmic strategies that could achieve better performance.
@@ -57,7 +57,7 @@ Explain the completely different algorithmic approach you are taking and why it 
 * Use the <NAME>, <DESCRIPTION>, and <CODE> delimiters to structure your response. It will be parsed afterwards."""
 
 
-# Variant 2: Motivated by Context but Different
+                                               
 FULL_SYS_FORMAT_MOTIVATED = """
 Create a novel algorithm that draws inspiration from the provided context programs but implements a fundamentally different approach.
 Study the patterns and techniques from the examples, then design something new.
@@ -84,7 +84,7 @@ Explain how you drew inspiration from the context programs and what novel approa
 * Use the <NAME>, <DESCRIPTION>, and <CODE> delimiters to structure your response. It will be parsed afterwards."""
 
 
-# Variant 3: Structural Modification
+                                    
 FULL_SYS_FORMAT_STRUCTURAL = """
 Redesign the program with a different structural approach while potentially using similar core concepts.
 Focus on changing the overall architecture, data flow, or program organization.
@@ -111,7 +111,7 @@ Describe the structural changes you are making and how they improve the program'
 * Use the <NAME>, <DESCRIPTION>, and <CODE> delimiters to structure your response. It will be parsed afterwards."""
 
 
-# Variant 4: Parameter-Based Algorithm Design
+                                             
 FULL_SYS_FORMAT_PARAMETRIC = """
 Analyze the current program to identify its key parameters and algorithmic components, then design a new algorithm with different parameter settings and configurations.
 You MUST respond using a short summary name, description and the full code:
@@ -138,7 +138,7 @@ Identify the key parameters in the current approach and explain how your new par
 * Maintain the same inputs and outputs as the original program.
 * Use the <NAME>, <DESCRIPTION>, and <CODE> delimiters to structure your response. It will be parsed afterwards."""
 
-# List of all variants for sampling
+                                   
 FULL_SYS_FORMATS = [
     FULL_SYS_FORMAT_DEFAULT,
     FULL_SYS_FORMAT_DIFFERENT,
@@ -147,7 +147,7 @@ FULL_SYS_FORMATS = [
     FULL_SYS_FORMAT_PARAMETRIC,
 ]
 
-# Variant names for debugging/logging
+                                     
 FULL_SYS_FORMAT_NAMES = [
     "default",
     "different_algorithm",

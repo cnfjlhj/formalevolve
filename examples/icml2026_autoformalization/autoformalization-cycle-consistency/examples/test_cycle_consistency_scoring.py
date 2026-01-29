@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Test Cycle Consistency Scoring
 
@@ -18,32 +18,32 @@ from dataclasses import dataclass
 from typing import List, Optional
 import requests
 
-# ============================================================
-# Configuration (paper-aligned defaults)
-# ============================================================
+                                                              
+                                        
+                                                              
 
 API_BASE_URL = "http://127.0.0.1:8090/v1"
 MODEL_NAME = "Qwen2.5-32B-Instruct"
 
-# The paper prompt is intentionally simple (Page 12-13):
-# "Informalize: {formalized_output}"
-# No complex system prompt.
+                                                        
+                                    
+                           
 INFORMALIZE_PROMPT_TEMPLATE = "Informalize: {formal_statement}"
 
-# The paper does not use a system prompt; only a simple user prompt.
+                                                                    
 USE_SYSTEM_PROMPT = False
 
-# Softmax temperature for probability normalization
-# Tune this value to match the paper's reported distribution (e.g., 0.73/0.26 vs 0.97/0.03).
-# T > 1: smoother distribution
-# T < 1: sharper distribution
-# Empirically, T ≈ 3.5 is a good match for the paper examples.
+                                                   
+                                                                                            
+                              
+                             
+                                                              
 SOFTMAX_TEMPERATURE = 3.5
 
 
-# ============================================================
-# Test data (from the paper)
-# ============================================================
+                                                              
+                            
+                                                              
 
 @dataclass
 class TestCase:
@@ -52,7 +52,7 @@ class TestCase:
     candidates: List[dict]
 
 
-# Example from the paper (Page 10-11)
+                                     
 TEST_CASE_1 = TestCase(
     name="f(x) = cx³ - 9x + 3 (Paper Page 10-11)",
     informal="Given f(x) = cx³ - 9x + 3 and f(2) = 9, find the value of c. Show that it is 3.",
@@ -80,7 +80,7 @@ TEST_CASE_1 = TestCase(
     ]
 )
 
-# Example from the paper (Page 3, Figure 3)
+                                           
 TEST_CASE_2 = TestCase(
     name="Pythagorean integers (Paper Page 3, Figure 3)",
     informal="There are integers x, y, z > 0 with x² + y² = z².",
@@ -103,7 +103,7 @@ TEST_CASE_2 = TestCase(
     ]
 )
 
-# Additional tests
+                  
 TEST_CASE_3 = TestCase(
     name="n² ≥ n for positive integers",
     informal="For all positive integers n, n squared is greater than or equal to n.",
@@ -129,9 +129,9 @@ TEST_CASE_3 = TestCase(
 ALL_TEST_CASES = [TEST_CASE_1, TEST_CASE_2, TEST_CASE_3]
 
 
-# ============================================================
-# Helpers
-# ============================================================
+                                                              
+         
+                                                              
 
 def softmax(log_probs: List[float], temperature: float = 1.0) -> List[float]:
     """
@@ -140,10 +140,10 @@ def softmax(log_probs: List[float], temperature: float = 1.0) -> List[float]:
     In the paper (Page 10-11), scores are presented as normalized probabilities
     such as 0.73, 0.26, 0.00, which correspond to a softmax over log-probs.
     """
-    # Clamp -inf for numerical stability.
+                                         
     log_probs = [lp if lp > -1e10 else -1e10 for lp in log_probs]
 
-    # Numerically stable softmax.
+                                 
     max_lp = max(log_probs)
     exp_scores = [math.exp((lp - max_lp) / temperature) for lp in log_probs]
     total = sum(exp_scores)
@@ -154,9 +154,9 @@ def softmax(log_probs: List[float], temperature: float = 1.0) -> List[float]:
     return [s / total for s in exp_scores]
 
 
-# ============================================================
-# Log-probability computation
-# ============================================================
+                                                              
+                             
+                                                              
 
 def compute_log_probability(prompt: str, completion: str) -> dict:
     """
@@ -170,9 +170,9 @@ def compute_log_probability(prompt: str, completion: str) -> dict:
 
     full_text = prompt + completion
 
-    # Method 1: completions API (most accurate)
+                                               
     try:
-        # First get the number of prompt tokens.
+                                                
         response_prompt = requests.post(
             f"{API_BASE_URL}/completions",
             json={
@@ -189,7 +189,7 @@ def compute_log_probability(prompt: str, completion: str) -> dict:
             prompt_data = response_prompt.json()
             prompt_tokens = prompt_data["usage"]["prompt_tokens"]
 
-            # Then request logprobs for the full text.
+                                                      
             response_full = requests.post(
                 f"{API_BASE_URL}/completions",
                 json={
@@ -209,8 +209,8 @@ def compute_log_probability(prompt: str, completion: str) -> dict:
                 if logprobs_data and "token_logprobs" in logprobs_data:
                     all_logprobs = logprobs_data["token_logprobs"]
 
-                    # Take only completion logprobs (skip the prompt portion).
-                    # Note: the first token logprob is often None.
+                                                                              
+                                                                  
                     completion_logprobs = all_logprobs[prompt_tokens:]
                     completion_logprobs = [lp for lp in completion_logprobs if lp is not None]
 
@@ -227,7 +227,7 @@ def compute_log_probability(prompt: str, completion: str) -> dict:
     except Exception as e:
         print(f"    Completions API error: {e}")
 
-    # Method 2: fallback
+                        
     return compute_log_probability_fallback(prompt, completion)
 
 
@@ -256,7 +256,7 @@ def compute_log_probability_fallback(prompt: str, completion: str) -> dict:
                 all_logprobs = [lp for lp in all_logprobs if lp is not None]
 
                 if all_logprobs:
-                    # Take the first N tokens (approx completion length).
+                                                                         
                     n_tokens = min(len(all_logprobs), 50)
                     total = sum(all_logprobs[:n_tokens])
                     return {
@@ -286,18 +286,18 @@ def score_candidate(informal: str, formal: str) -> dict:
       score = log P(informal | prompt)
     """
 
-    # Build prompt (paper-aligned).
+                                   
     prompt = INFORMALIZE_PROMPT_TEMPLATE.format(formal_statement=formal)
 
-    # Compute log probability.
+                              
     result = compute_log_probability(prompt, informal)
 
     return result
 
 
-# ============================================================
-# Run tests
-# ============================================================
+                                                              
+           
+                                                              
 
 def run_test_case(test_case: TestCase):
     print(f"\n{'='*70}")
@@ -323,15 +323,15 @@ def run_test_case(test_case: TestCase):
 
         print(f"      log_prob={score['log_prob']:.2f}, tokens={score['num_tokens']}")
 
-    # Compute normalized probabilities (paper-style: 0.73, 0.26, 0.00).
+                                                                       
     log_probs = [r["score"]["log_prob"] for r in results]
     probs = softmax(log_probs, temperature=SOFTMAX_TEMPERATURE)
 
-    # Attach normalized probabilities.
+                                      
     for i, r in enumerate(results):
         r["probability"] = probs[i]
 
-    # Sort by probability.
+                          
     results.sort(key=lambda x: x["probability"], reverse=True)
 
     print(f"\n{'─'*70}")
@@ -370,7 +370,7 @@ def main():
     print(f"  Prompt template: '{INFORMALIZE_PROMPT_TEMPLATE}'")
     print(f"  Softmax temperature: {SOFTMAX_TEMPERATURE}")
 
-    # Test API
+              
     print("\nTesting API connection...")
     try:
         response = requests.get(f"{API_BASE_URL}/models", timeout=10)
@@ -383,12 +383,12 @@ def main():
         print(f"  ✗ Cannot connect: {e}")
         return
 
-    # Run tests
+               
     all_results = {}
     for tc in ALL_TEST_CASES:
         all_results[tc.name] = run_test_case(tc)
 
-    # Summary
+             
     print(f"\n{'='*70}")
     print("SUMMARY")
     print("="*70)

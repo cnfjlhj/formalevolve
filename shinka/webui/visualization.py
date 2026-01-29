@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Shinka Visualization Module
 
@@ -27,11 +27,11 @@ from typing import Optional, Dict, Any, Tuple
 
 from shinka.database import DatabaseConfig, ProgramDatabase
 
-# We'll use a simple text-to-PDF approach instead of complex dependencies
+                                                                         
 WEASYPRINT_AVAILABLE = False
 
 DEFAULT_PORT = 8000
-CACHE_EXPIRATION_SECONDS = 5  # Cache data for 5 seconds
+CACHE_EXPIRATION_SECONDS = 5                            
 db_cache: Dict[str, Tuple[float, Any]] = {}
 
 
@@ -79,7 +79,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
             print("[SERVER] Root path requested, serving viz_tree.html")
             self.path = "/viz_tree.html"
 
-        # Serve static files from the webui directory
+                                                     
         return http.server.SimpleHTTPRequestHandler.do_GET(self)
 
     def handle_list_databases(self):
@@ -91,7 +91,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
         db_files = []
         date_pattern = re.compile(r"_(\d{8}_\d{6})")
 
-        # Get the task name from the search root directory name
+                                                               
         task_name = os.path.basename(self.search_root)
 
         if os.path.exists(self.search_root):
@@ -103,17 +103,17 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                         client_path = os.path.relpath(full_path, self.search_root)
                         display_name = f"{Path(f).stem} - {Path(client_path).parent}"
 
-                        # Extract date for sorting
-                        sort_key = "0"  # Default for paths without a date
+                                                  
+                        sort_key = "0"                                    
                         match = date_pattern.search(client_path)
                         if match:
                             sort_key = match.group(1)
 
-                        # Modify the path structure to include task name for proper organization
-                        # If the path doesn't already have 3+ parts, prepend the task name
+                                                                                                
+                                                                                          
                         path_parts = client_path.split("/")
                         if len(path_parts) < 3:
-                            # Add task name as the first part of the path
+                                                                         
                             modified_client_path = f"{task_name}/{client_path}"
                         else:
                             modified_client_path = client_path
@@ -121,8 +121,8 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                         db_info = {
                             "path": modified_client_path,
                             "name": display_name,
-                            "sort_key": sort_key,  # Add key for sorting
-                            "actual_path": client_path,  # Keep the actual relative path for file operations
+                            "sort_key": sort_key,                       
+                            "actual_path": client_path,                                                     
                         }
                         db_files.append(db_info)
                         print(
@@ -132,10 +132,10 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
         if not db_files:
             print("[SERVER] No database files found in search directory.")
 
-        # Sort databases by the extracted date, newest first
+                                                            
         db_files.sort(key=lambda x: x.get("sort_key", "0"), reverse=True)
 
-        # Remove sort_key before sending to client (but keep actual_path)
+                                                                         
         for db in db_files:
             del db["sort_key"]
 
@@ -146,7 +146,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
         """Convert a potentially modified db_path back to the actual file path."""
         task_name = os.path.basename(self.search_root)
 
-        # If the path starts with the task name, remove it
+                                                          
         if db_path.startswith(f"{task_name}/"):
             return db_path[len(task_name) + 1 :]
 
@@ -156,11 +156,11 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
         """Fetch all programs from a given database file."""
         print(f"[SERVER] Fetching programs from DB: {db_path}")
 
-        # Handle the case where db_path might have the task name prepended
-        # Extract the actual path by removing the task name prefix if present
+                                                                          
+                                                                             
         actual_db_path = self._get_actual_db_path(db_path)
 
-        # Check cache first
+                           
         if db_path in db_cache:
             last_fetch_time, cached_data = db_cache[db_path]
             if time.time() - last_fetch_time < CACHE_EXPIRATION_SECONDS:
@@ -168,7 +168,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(cached_data)
                 return
 
-        # Construct absolute path to the database from search root using actual path
+                                                                                    
         abs_db_path = os.path.join(self.search_root, actual_db_path)
         print(f"[SERVER] Absolute DB path: {abs_db_path} (from {db_path})")
 
@@ -176,28 +176,28 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404, f"Database file not found: {actual_db_path}")
             return
 
-        # Retry logic for the reader with improved WAL mode support
-        max_retries = 5  # Increased retries for better resilience
-        delay = 0.1  # Shorter initial delay
+                                                                   
+        max_retries = 5                                           
+        delay = 0.1                         
         for i in range(max_retries):
             db = None
             try:
                 config = DatabaseConfig(db_path=abs_db_path)
                 db = ProgramDatabase(config, read_only=True)
 
-                # Set WAL mode compatible settings for read-only connections
+                                                                            
                 if db.cursor:
                     db.cursor.execute(
                         "PRAGMA busy_timeout = 10000;"
-                    )  # 10 second timeout
-                    db.cursor.execute("PRAGMA journal_mode = WAL;")  # Ensure WAL mode
+                    )                     
+                    db.cursor.execute("PRAGMA journal_mode = WAL;")                   
 
                 programs = db.get_all_programs()
 
-                # Convert Program objects to dicts for JSON
+                                                           
                 programs_dict = [p.to_dict() for p in programs]
 
-                # Update cache
+                              
                 db_cache[db_path] = (time.time(), programs_dict)
 
                 self.send_json_response(programs_dict)
@@ -206,7 +206,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                     f"programs from {db_path} (attempt {i + 1})"
                 )
                 print(success_msg)
-                return  # Success, exit the retry loop
+                return                                
 
             except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
                 error_str = str(e).lower()
@@ -217,14 +217,14 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                     )
                     if i < max_retries - 1:
                         time.sleep(delay)
-                        delay = min(delay * 1.5, 2.0)  # Exponential backoff, max 2s
+                        delay = min(delay * 1.5, 2.0)                               
                         continue
                 else:
                     print(f"[SERVER] Non-recoverable database error: {e}")
                     self.send_error(500, f"Database error: {str(e)}")
                     return
 
-                # Last retry failed
+                                   
                 if i == max_retries - 1:
                     err_msg = (
                         f"[SERVER] Database still busy after {max_retries} attempts"
@@ -236,12 +236,12 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                     )
 
             except Exception as e:
-                # Catch any other unexpected errors
+                                                   
                 print(f"[SERVER] An unexpected error occurred: {e}")
                 self.send_error(500, f"An unexpected error occurred: {str(e)}")
-                return  # Don't retry on unknown errors
+                return                                 
             finally:
-                # Ensure database connection is properly closed
+                                                               
                 if db and hasattr(db, "close"):
                     try:
                         db.close()
@@ -252,10 +252,10 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
         """List available meta_{gen}.txt files for a given database."""
         print(f"[SERVER] Listing meta files for DB: {db_path}")
 
-        # Get the actual database path
+                                      
         actual_db_path = self._get_actual_db_path(db_path)
 
-        # Get the directory containing the database file
+                                                        
         abs_db_path = os.path.join(self.search_root, actual_db_path)
         db_dir = os.path.dirname(abs_db_path)
 
@@ -265,11 +265,11 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         meta_files = []
         try:
-            # Look for meta_{gen}.txt files in the same directory as the DB
+                                                                           
             for file in os.listdir(db_dir):
                 if file.startswith("meta_") and file.endswith(".txt"):
-                    # Extract generation number
-                    gen_str = file[5:-4]  # Remove 'meta_' and '.txt'
+                                               
+                    gen_str = file[5:-4]                             
                     try:
                         generation = int(gen_str)
                         meta_files.append(
@@ -280,10 +280,10 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                             }
                         )
                     except ValueError:
-                        # Skip files that don't have valid generation numbers
+                                                                             
                         continue
 
-            # Sort by generation number
+                                       
             meta_files.sort(key=lambda x: x["generation"])
 
             print(f"[SERVER] Found {len(meta_files)} meta files")
@@ -300,14 +300,14 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
             f"generation: {generation}"
         )
 
-        # Get the actual database path
+                                      
         actual_db_path = self._get_actual_db_path(db_path)
 
-        # Get the directory containing the database file
+                                                        
         abs_db_path = os.path.join(self.search_root, actual_db_path)
         db_dir = os.path.dirname(abs_db_path)
 
-        # Construct the meta file path
+                                      
         meta_filename = f"meta_{generation}.txt"
         meta_file_path = os.path.join(db_dir, meta_filename)
 
@@ -340,14 +340,14 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
             f"[SERVER] PDF download request for DB: {db_path}, generation: {generation}"
         )
 
-        # Get the actual database path
+                                      
         actual_db_path = self._get_actual_db_path(db_path)
 
-        # Get the directory containing the database file
+                                                        
         abs_db_path = os.path.join(self.search_root, actual_db_path)
         db_dir = os.path.dirname(abs_db_path)
 
-        # Construct the meta file path
+                                      
         meta_filename = f"meta_{generation}.txt"
         meta_file_path = os.path.join(db_dir, meta_filename)
 
@@ -361,12 +361,12 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
 
             pdf_filename = f"meta_{generation}.pdf"
 
-            # Try to generate PDF using available methods
+                                                         
             pdf_bytes = self._generate_pdf(content, generation)
 
             if pdf_bytes is None:
                 print("[SERVER] All PDF generation methods failed, serving text")
-                # Fall back to serving formatted text with PDF headers
+                                                                      
                 formatted_content = (
                     f"Meta Generation {generation}\n{'=' * 50}\n\n{content}"
                 )
@@ -391,26 +391,26 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         print(f"[SERVER] Attempting to generate PDF for generation {generation}")
 
-        # Method 1: Try simple HTML to PDF using browser print
+                                                              
         try:
-            # Preprocess content to fix line break issues
+                                                         
             processed_content = self._fix_line_breaks(content)
 
-            # Convert markdown to HTML with better line break handling
+                                                                      
             try:
                 html_content = markdown.markdown(
                     processed_content,
-                    extensions=["extra", "nl2br"],  # nl2br: newlines to <br>
+                    extensions=["extra", "nl2br"],                           
                 )
             except Exception:
-                # Fallback if nl2br extension is not available
+                                                              
                 html_content = markdown.markdown(
                     processed_content, extensions=["extra"]
                 )
-                # Manually convert remaining single line breaks to <br>
+                                                                       
                 html_content = html_content.replace("\n", "<br>\n")
 
-            # Add boxes around program summaries after markdown conversion
+                                                                          
             print(
                 f"[SERVER] HTML content before boxing (first 500 chars): "
                 f"{html_content[:500]}"
@@ -421,10 +421,10 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                 f"{html_content[:500]}"
             )
 
-            # Get the logo as base64
+                                    
             logo_data_uri = self._get_logo_base64()
 
-            # Create a well-formatted HTML document
+                                                   
             html_full = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -556,7 +556,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
 </body>
 </html>"""
 
-            # Try wkhtmltopdf if available
+                                          
             try:
                 with tempfile.NamedTemporaryFile(
                     mode="w", suffix=".html", delete=False
@@ -569,7 +569,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                 ) as pdf_file:
                     pdf_file_path = pdf_file.name
 
-                # Try wkhtmltopdf directly
+                                          
                 result = subprocess.run(
                     [
                         "wkhtmltopdf",
@@ -602,14 +602,14 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
             except (subprocess.TimeoutExpired, FileNotFoundError) as e:
                 print(f"[SERVER] wkhtmltopdf not available: {e}")
             finally:
-                # Clean up temp files
+                                     
                 try:
                     os.unlink(html_file_path)
                     os.unlink(pdf_file_path)
                 except (NameError, OSError):
                     pass
 
-            # Try pandoc as fallback
+                                    
             try:
                 with tempfile.NamedTemporaryFile(
                     mode="w", suffix=".html", delete=False
@@ -640,7 +640,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
             except (subprocess.TimeoutExpired, FileNotFoundError) as e:
                 print(f"[SERVER] pandoc not available: {e}")
             finally:
-                # Clean up temp files
+                                     
                 try:
                     os.unlink(html_file_path)
                     os.unlink(pdf_file_path)
@@ -656,14 +656,14 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
     def _fix_line_breaks(self, content: str) -> str:
         """Fix line breaks in markdown content for better PDF rendering."""
 
-        # Simple approach: ensure proper paragraph breaks
-        # Replace single newlines that should be paragraph breaks with
-        # double newlines
+                                                         
+                                                                      
+                         
 
-        # First, normalize line endings
+                                       
         content = content.replace("\r\n", "\n").replace("\r", "\n")
 
-        # Split into lines
+                          
         lines = content.split("\n")
         result_lines = []
 
@@ -671,29 +671,29 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
         while i < len(lines):
             current_line = lines[i].strip()
 
-            # Always add the current line
+                                         
             result_lines.append(current_line)
 
-            # Look ahead to see if we need to add extra spacing
+                                                               
             if i < len(lines) - 1:
                 next_line = lines[i + 1].strip()
 
-                # Add extra line break for paragraph separation if:
-                # 1. Current line has substantial content
-                # 2. Next line starts a new thought (capital letter)
-                # 3. Neither line is a markdown special element
+                                                                   
+                                                         
+                                                                    
+                                                               
                 if (
                     current_line
                     and next_line
-                    and len(current_line) > 30  # Substantial content
-                    and current_line.endswith((".", "!", "?", ";"))  # Sentence ending
-                    and next_line[0].isupper()  # Next starts with capital
+                    and len(current_line) > 30                       
+                    and current_line.endswith((".", "!", "?", ";"))                   
+                    and next_line[0].isupper()                            
                     and not next_line.startswith(
                         ("#", "-", "*", "+")
-                    )  # Not markdown list/header
+                    )                            
                     and not re.match(r"^\*\*\w+:\*\*", next_line)
-                ):  # Not bold field
-                    result_lines.append("")  # Add blank line
+                ):                  
+                    result_lines.append("")                  
 
             i += 1
 
@@ -702,15 +702,15 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
     def _add_program_boxes_html(self, html_content: str) -> str:
         """Add HTML boxes around program summaries in converted HTML."""
 
-        # Match entire <p> tags that contain program summaries
-        # Pattern matches <p> tags that start with <strong>Program Name:
+                                                              
+                                                                        
         program_pattern = r"(<p><strong>Program Name:[^<]*</strong>[\s\S]*?</p>)"
 
         def wrap_program_html(match):
             program_html = match.group(1).strip()
             return f'<div class="program-box">{program_html}</div>'
 
-        # Replace all program summaries with boxed versions
+                                                           
         result = re.sub(
             program_pattern,
             wrap_program_html,
@@ -723,7 +723,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
     def _get_logo_base64(self) -> str:
         """Get the Shinka logo as base64 data URI."""
         try:
-            # Look for favicon.png in the main shinka package directory
+                                                                       
             logo_path = os.path.join(os.path.dirname(__file__), "favicon.png")
             if os.path.exists(logo_path):
                 with open(logo_path, "rb") as f:
@@ -736,7 +736,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def send_json_response(self, data):
         """Helper to send a JSON response."""
-        # Use custom JSON encoder to handle NaN values
+                                                      
         payload = json.dumps(data, default=self._json_encoder).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -766,7 +766,7 @@ def create_handler_factory(search_root):
 
 def start_server(port: int, search_root: str, db_path: Optional[str] = None):
     """Start the HTTP server."""
-    # Change to the webui directory inside the shinka package to serve static files
+                                                                                   
     webui_dir = os.path.dirname(__file__)
     webui_dir = os.path.abspath(webui_dir)
 
@@ -777,10 +777,10 @@ def start_server(port: int, search_root: str, db_path: Optional[str] = None):
     print(f"[DEBUG] Server root directory: {webui_dir}")
     print(f"[DEBUG] Search root directory: {search_root}")
 
-    # Create handler factory with search root
+                                             
     handler_factory = create_handler_factory(search_root)
 
-    # Reuse the socket so you can restart quickly
+                                                 
     class ReusableTCPServer(socketserver.TCPServer):
         allow_reuse_address = True
 
@@ -824,7 +824,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # Resolve the root directory to an absolute path
+                                                    
     search_root = os.path.abspath(args.root_directory)
 
     if not os.path.exists(search_root):
@@ -833,25 +833,25 @@ def main():
 
     print(f"[INFO] Searching for databases in: {search_root}")
 
-    # Kick off the HTTP server in a daemon thread.
+                                                  
     server_thread = threading.Thread(
         target=start_server,
         args=(args.port, search_root, args.db),
         daemon=True,
     )
     server_thread.start()
-    time.sleep(0.8)  # tiny delay so the banner prints before we continue
+    time.sleep(0.8)                                                      
 
-    # Construct URL, passing db path if provided
+                                                
     base_url = f"http://localhost:{args.port}/viz_tree.html"
     if args.db:
-        # URL encode the db path to handle special characters
+                                                             
         url_params = urllib.parse.urlencode({"db_path": args.db})
         viz_url = f"{base_url}?{url_params}"
     else:
         viz_url = base_url
 
-    # Try to open a browser if requested
+                                        
     if args.open_browser:
         try:
             webbrowser.open_new_tab(viz_url)

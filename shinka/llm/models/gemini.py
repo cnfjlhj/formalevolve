@@ -52,7 +52,7 @@ def query_gemini(
         try:
             text = response.choices[0].message.content
         except Exception:
-            # Reasoning models - ResponseOutputMessage
+                                                      
             text = response.output[1].content[0].text
         new_msg_history.append({"role": "assistant", "content": text})
     else:
@@ -68,7 +68,7 @@ def query_gemini(
         r"<thought>(.*?)</thought>", response.choices[0].message.content, re.DOTALL
     )
     if content_match:
-        # Extract everything before and after the <thought> tag as content
+                                                                          
         content = (
             response.choices[0].message.content[: content_match.start()]
             + response.choices[0].message.content[content_match.end() :]

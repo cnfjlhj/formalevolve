@@ -12,19 +12,19 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Global singleton instance
+                           
 _lean_server = None
 
-# Configuration
-#
-# Paper alignment:
-# - The ICML 2026 experiments use Lean 4.15.0 + Mathlib v4.15.0 (pinned via Kimina Lean Server).
-# - For the open-source reproducibility pipeline, local compilation uses `lean-interact` and
-#   downloads a matching Mathlib toolchain on first run.
-#
-# You can override these to match your environment:
-# - LEAN_INTERACT_LEAN_VERSION="v4.15.0"
-# - LEAN_INTERACT_REQUIRE="mathlib"
+               
+ 
+                  
+                                                                                                
+                                                                                            
+                                                        
+ 
+                                                   
+                                        
+                                   
 LEAN_VERSION = os.environ.get("LEAN_INTERACT_LEAN_VERSION", "v4.15.0").strip() or "v4.15.0"
 LEAN_REQUIRE = os.environ.get("LEAN_INTERACT_REQUIRE", "mathlib").strip() or "mathlib"
 DEFAULT_CACHE_DIR = str(Path.home() / ".cache" / "lean_interact")
@@ -138,7 +138,7 @@ def shutdown_lean_server():
     if _lean_server is not None:
         logger.info("Shutting down Lean server...")
         try:
-            # AutoLeanServer may have a close/shutdown method
+                                                             
             if hasattr(_lean_server, 'close'):
                 _lean_server.close()
             elif hasattr(_lean_server, 'shutdown'):
@@ -150,7 +150,7 @@ def shutdown_lean_server():
 
 
 if __name__ == "__main__":
-    # Test the module
+                     
     logging.basicConfig(level=logging.INFO)
 
     print("Testing lean_env module...")
@@ -160,7 +160,7 @@ if __name__ == "__main__":
         print(f"Server initialized: {server}")
         print(f"Is available: {is_lean_server_available()}")
 
-        # Test running a simple command
+                                       
         from lean_interact import Command
         result = server.run(Command(cmd="#check Nat"), timeout=30)
         print(f"Test result: {result}")

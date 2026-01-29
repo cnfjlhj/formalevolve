@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -160,7 +160,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.run and not args.watch:
-        # Default to watch mode for "fill holes while running" workflows.
+                                                                         
         args.watch = True
 
     out_root = Path(args.out_root).resolve()
@@ -228,7 +228,7 @@ def main() -> int:
         print("[DryRun] Pass --run to execute reruns.")
         return 0
 
-    # Prepare baseline-specific env (mirrors launcher.py behavior).
+                                                                   
     baseline_defs = manifest.get("baseline_definitions") or {}
     sem_enabled = False
     disable_repair = False
@@ -238,8 +238,8 @@ def main() -> int:
         disable_repair = bool(spec.get("disable_repair"))
         break
 
-    # IMPORTANT: repair calls DO consume the per-problem call budget.
-    # If you want exactly N evaluated samples, you must reserve extra calls for repair.
+                                                                     
+                                                                                       
     max_repair_attempts_gen0 = int(manifest.get("max_repair_attempts_gen0") or 0)
     max_semantic_repair_attempts = int(manifest.get("max_semantic_repair_attempts") or 0)
     multiplier = 1
@@ -263,7 +263,7 @@ def main() -> int:
         )
         base_env["AUTOFORMAL_SEMANTIC_REPAIR_TEMPERATURE"] = str(float(manifest.get("semantic_repair_temperature") or 0.0))
 
-    # Run a tiny worker pool.
+                             
     max_workers = max(1, int(args.concurrency))
     failures = 0
 
@@ -276,7 +276,7 @@ def main() -> int:
         )
         if disable_repair:
             cmd.append("--disable_repair")
-        # Keep reruns lightweight; per-problem runner does not need internal parallelism here.
+                                                                                              
         cmd.extend(["--max_parallel_jobs", "1"])
         log_path = t.results_dir / "fill_batchN.log"
         err_path = t.results_dir / "fill_batchN.err"
@@ -306,7 +306,7 @@ def main() -> int:
             continue
 
         running: List[subprocess.Popen[str]] = []
-        # In watch mode, process at most one batch (<=max_workers) per scan, then rescan.
+                                                                                         
         queue = list(tasks[:max_workers]) if args.watch else list(tasks)
 
         while queue or running:

@@ -78,13 +78,13 @@ def analyze_python_complexity(code_string):
 
     nesting_depth = max_nesting_depth(code_string)
 
-    # Normalized scores for aggregation
-    norm_cc = total_cc / 10  # Assuming 10 is high complexity
+                                       
+    norm_cc = total_cc / 10                                  
     norm_halstead = math.log2(halstead_volume + 1) / 10
     norm_loc = math.log2(loc + 1) / 10
-    norm_nesting = nesting_depth / 5  # Assuming depth 5 is quite nested
+    norm_nesting = nesting_depth / 5                                    
 
-    # Complexity Score (weighted sum)
+                                     
     complexity_score = (
         0.4 * norm_cc + 0.4 * norm_halstead + 0.1 * norm_loc + 0.1 * norm_nesting
     )
@@ -117,7 +117,7 @@ def analyze_cpp_complexity(code_string):
     """
     lines = code_string.split("\n")
 
-    # Count lines of code (excluding empty lines and comments)
+                                                              
     loc = len(lines)
     lloc = 0
     comments = 0
@@ -135,7 +135,7 @@ def analyze_cpp_complexity(code_string):
         else:
             lloc += 1
 
-    # Simple cyclomatic complexity - count decision points
+                                                          
     complexity_patterns = [
         r"\bif\b",
         r"\belse\b",
@@ -147,11 +147,11 @@ def analyze_cpp_complexity(code_string):
         r"\b\?\b",
     ]
 
-    total_cc = 1  # Base complexity
+    total_cc = 1                   
     for pattern in complexity_patterns:
         total_cc += len(re.findall(pattern, code_string, re.IGNORECASE))
 
-    # Estimate nesting depth by counting braces
+                                               
     max_nesting = 0
     current_nesting = 0
     for char in code_string:
@@ -161,7 +161,7 @@ def analyze_cpp_complexity(code_string):
         elif char == "}":
             current_nesting = max(0, current_nesting - 1)
 
-    # Simple maintainability index approximation
+                                                
     volume = max(1, lloc * math.log2(max(1, total_cc)))
     mi = max(
         0,
@@ -171,7 +171,7 @@ def analyze_cpp_complexity(code_string):
         - 16.2 * math.log2(max(1, loc)),
     )
 
-    # Normalized scores
+                       
     norm_cc = min(total_cc / 10, 1.0)
     norm_volume = min(math.log2(volume + 1) / 10, 1.0)
     norm_loc = min(math.log2(loc + 1) / 10, 1.0)
@@ -183,10 +183,10 @@ def analyze_cpp_complexity(code_string):
 
     return {
         "cyclomatic_complexity": total_cc,
-        "average_cyclomatic_complexity": total_cc,  # Same as total for simplicity
+        "average_cyclomatic_complexity": total_cc,                                
         "halstead_volume": volume,
-        "halstead_difficulty": 1.0,  # Placeholder
-        "halstead_effort": volume,  # Simplified
+        "halstead_difficulty": 1.0,               
+        "halstead_effort": volume,              
         "lines_of_code": loc,
         "logical_lines_of_code": lloc,
         "comments": comments,
@@ -209,7 +209,7 @@ def analyze_generic_complexity(code_string):
     lines = code_string.split("\n")
     loc = len([line for line in lines if line.strip()])
 
-    # Very simple complexity estimate based on code length
+                                                          
     complexity_score = min(math.log2(max(1, loc)) / 10, 1.0)
 
     return {
@@ -221,7 +221,7 @@ def analyze_generic_complexity(code_string):
         "lines_of_code": loc,
         "logical_lines_of_code": loc,
         "comments": 0,
-        "maintainability_index": 100.0,  # Default good score
+        "maintainability_index": 100.0,                      
         "max_nesting_depth": 1,
         "complexity_score": round(complexity_score, 3),
     }
@@ -248,21 +248,21 @@ def analyze_code_metrics(code_string, language="python"):
         - maintainability_index: Code maintainability score
         - complexity_score: Normalized overall complexity (0-1)
     """
-    # Normalize language name
+                             
     language = language.lower()
 
-    # For Python, use the full radon-based analysis
+                                                   
     if language == "python":
         try:
             return analyze_python_complexity(code_string)
         except SyntaxError:
-            # If Python parsing fails, fall back to C++ analysis
+                                                                
             return analyze_cpp_complexity(code_string)
 
-    # For C/C++/CUDA/Rust/Swift/JSON and other languages, use regex-based analysis
+                                                                                  
     elif language in ["cpp", "c", "cuda", "c++", "rust", "swift", "json", "json5"]:
         return analyze_cpp_complexity(code_string)
 
-    # For unknown languages, use simple line-based complexity
+                                                             
     else:
         return analyze_generic_complexity(code_string)

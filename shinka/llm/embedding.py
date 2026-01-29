@@ -35,10 +35,10 @@ OPENAI_EMBEDDING_COSTS = {
     "text-embedding-3-large": 0.13 / M,
 }
 
-# Gemini embedding costs (approximate - check current pricing)
+                                                              
 GEMINI_EMBEDDING_COSTS = {
-    "gemini-embedding-exp-03-07": 0.0 / M,  # Experimental model, often free
-    "gemini-embedding-001": 0.0 / M,  # Check current pricing
+    "gemini-embedding-exp-03-07": 0.0 / M,                                  
+    "gemini-embedding-001": 0.0 / M,                         
 }
 
 def _detect_e5_http_server(embed_base_url: str) -> Optional[str]:
@@ -62,7 +62,7 @@ def _detect_e5_http_server(embed_base_url: str) -> Optional[str]:
         candidates.append(base[: -len("/v1")])
 
     timeout_s = float(os.environ.get("E5_HTTP_EMBED_DETECT_TIMEOUT", "0.5"))
-    for cand in dict.fromkeys(candidates):  # de-dupe, preserve order
+    for cand in dict.fromkeys(candidates):                           
         url = f"{cand.rstrip('/')}/openapi.json"
         try:
             with urlopen(url, timeout=timeout_s) as resp:
@@ -80,15 +80,15 @@ def _detect_e5_http_server(embed_base_url: str) -> Optional[str]:
 
 def get_client_model(model_name: str) -> tuple[Union[openai.OpenAI, str], str]:
     if any(model_name.startswith(p) for p in HF_EMBEDDING_PREFIXES):
-        # Local HuggingFace encoder model. The remainder after prefix is treated as a model id or local path.
+                                                                                                             
         model_to_use = model_name.split(":", 1)[1].strip()
         if not model_to_use:
             raise ValueError("Invalid HuggingFace embedding model spec: expected 'hf:<model_or_path>'")
         return "huggingface", model_to_use
 
     if model_name in OPENAI_EMBEDDING_MODELS:
-        # Allow separating the OpenAI-compatible base URL for embeddings
-        # from the one used for LLM generation (see OPENAI_LLM_BASE_URL).
+                                                                        
+                                                                         
         embed_base_url = os.environ.get("OPENAI_EMBED_BASE_URL")
         if embed_base_url:
             client = openai.OpenAI(base_url=embed_base_url)
@@ -96,7 +96,7 @@ def get_client_model(model_name: str) -> tuple[Union[openai.OpenAI, str], str]:
             client = openai.OpenAI()
         model_to_use = model_name
     elif model_name in AZURE_EMBEDDING_MODELS:
-        # get rid of the azure- prefix
+                                      
         model_to_use = model_name.split("azure-")[-1]
         client = openai.AzureOpenAI(
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
@@ -104,19 +104,19 @@ def get_client_model(model_name: str) -> tuple[Union[openai.OpenAI, str], str]:
             azure_endpoint=os.getenv("AZURE_API_ENDPOINT"),
         )
     elif model_name in GEMINI_EMBEDDING_MODELS:
-        # Configure Gemini API
+                              
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GEMINI_API_KEY environment variable not set for Gemini models")
         genai.configure(api_key=api_key)
-        client = "gemini"  # Use string identifier for Gemini
+        client = "gemini"                                    
         model_to_use = model_name
     else:
-        # Fallback: allow custom OpenAI-compatible embedding models (e.g. local vLLM/TEI servers).
-        # Users should set OPENAI_EMBED_BASE_URL to point to the embedding endpoint.
+                                                                                                  
+                                                                                    
         embed_base_url = os.environ.get("OPENAI_EMBED_BASE_URL")
         if embed_base_url:
-            # Detect non-OpenAI-compatible E5 server (POST /embed) and route accordingly.
+                                                                                         
             e5_base_url = _detect_e5_http_server(embed_base_url)
             if e5_base_url:
                 client = "e5_http"
@@ -135,7 +135,7 @@ def get_client_model(model_name: str) -> tuple[Union[openai.OpenAI, str], str]:
                     f"Using custom OpenAI-compatible embedding model '{model_name}' via OPENAI_EMBED_BASE_URL={embed_base_url}"
                 )
         else:
-            # Best-effort: try the default OpenAI client (may fail if the model is not supported).
+                                                                                                  
             client = openai.OpenAI()
             model_to_use = model_name
             logger.warning(
@@ -203,7 +203,7 @@ class EmbeddingClient:
         else:
             single_code = False
 
-        # Handle local HuggingFace encoder models.
+                                                  
         if self.client == "huggingface":
             import torch
             import torch.nn.functional as F
@@ -223,7 +223,7 @@ class EmbeddingClient:
 
                 with torch.no_grad():
                     outputs = self._hf_model(**inputs)
-                    last_hidden = outputs.last_hidden_state  # (B, T, H)
+                    last_hidden = outputs.last_hidden_state             
                     attn = inputs.get("attention_mask")
                     if attn is None:
                         pooled = last_hidden.mean(dim=1)
@@ -243,7 +243,7 @@ class EmbeddingClient:
                     return [], 0.0
                 return [[]], 0.0
 
-        # Handle the lightweight E5 HTTP embedding server (non-OpenAI-compatible).
+                                                                                  
         if self.client == "e5_http":
             base_url = str(self.model or "").rstrip("/")
             if not base_url:
@@ -274,7 +274,7 @@ class EmbeddingClient:
                     return [], 0.0
                 return [[]], 0.0
 
-        # Handle Gemini models
+                              
         if self.model_name in GEMINI_EMBEDDING_MODELS:
             try:
                 embeddings = []
@@ -301,7 +301,7 @@ class EmbeddingClient:
                     return [], 0.0
                 else:
                     return [[]], 0.0
-        # Handle OpenAI and Azure models (same interface)
+                                                         
         try:
             response = self.client.embeddings.create(
                 model=self.model, input=code, encoding_format="float"
@@ -310,7 +310,7 @@ class EmbeddingClient:
             total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
             cost_per_token = float(OPENAI_EMBEDDING_COSTS.get(self.model, 0.0))
             cost = total_tokens * cost_per_token
-            # Extract embedding from response
+                                             
             if single_code:
                 return response.data[0].embedding, cost
             else:
@@ -364,22 +364,22 @@ class EmbeddingClient:
         Returns:
             A tuple of the top k indices and the top k similarities.
         """
-        # get embedding of the new string
+                                         
         new_embedding, _ = self.get_embedding(new_str_query)
 
-        if not new_embedding:  # Handle case where embedding fails
+        if not new_embedding:                                     
             return [], []
 
-        # define cosine similarity
+                                  
         def cosine_similarity(a, b):
             return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-        # compute the cosine similarity between the new embed
+                                                             
         similarities = [
             cosine_similarity(new_embedding, embedding) for embedding in embeddings
         ]
 
-        # get the top k neighbors or random rows
+                                                
         if top_k == "random":
             if len(similarities) < 5:
                 top_idx = np.random.choice(
@@ -416,9 +416,9 @@ class EmbeddingClient:
         if isinstance(embeddings, pd.Series):
             embeddings = embeddings.tolist()
 
-        # Convert list to numpy array if needed
+                                               
         X = np.array(embeddings) if isinstance(embeddings, list) else embeddings
-        # preprocess the embeddings using standard scaler
+                                                         
         from sklearn.preprocessing import StandardScaler
 
         scaler = StandardScaler()
@@ -463,12 +463,12 @@ class EmbeddingClient:
         """
         from sklearn.mixture import GaussianMixture
 
-        # Perform GMM clustering on the PCA-reduced embeddings
+                                                              
         gmm = GaussianMixture(n_components=num_clusters, random_state=42)
         gmm.fit(embeddings)
         clusters = gmm.predict(embeddings)
 
-        # Optionally display detailed cluster information
+                                                         
         if verbose:
             logger.info(
                 f"GMM {num_clusters} Clusters ==> Got {len(embeddings)} "
@@ -516,26 +516,26 @@ def plot_2d_scatter(
     from matplotlib.colors import ListedColormap
     from matplotlib.lines import Line2D
 
-    # Create figure and 2D axes with adjusted size and spacing
+                                                              
     fig, ax = plt.subplots(figsize=(10, 7))
 
-    # Prepare cluster IDs and colormap
+                                      
     if cluster_ids is not None:
         original_unique_ids, cluster_ids_for_coloring = np.unique(
             cluster_ids, return_inverse=True
         )
         num_distinct_colors = len(original_unique_ids)
-        # Ensure cluster_ids_array for c= in scatter is the 0-indexed version
-        # This was previously cluster_ids_array = np.array(cluster_ids)
-        # Now it's cluster_ids_for_coloring
+                                                                             
+                                                                       
+                                           
     else:
         cluster_ids_for_coloring = np.zeros(transformed.shape[0])
         original_unique_ids = [
             0
-        ]  # For consistent ticks if colorbar is ever shown for no clusters
+        ]                                                                  
         num_distinct_colors = 1
 
-    # Create discrete colormap
+                              
     base_colors = [
         "green",
         "red",
@@ -552,7 +552,7 @@ def plot_2d_scatter(
         multiplier = (num_distinct_colors - 1) // len(base_colors) + 1
         extended_colors = base_colors * multiplier
         colors_for_cmap = extended_colors[:num_distinct_colors]
-    else:  # Should not happen if original_unique_ids is at least [0]
+    else:                                                            
         colors_for_cmap = ["blue"]
 
     cmap = ListedColormap(colors_for_cmap)
@@ -569,7 +569,7 @@ def plot_2d_scatter(
 
             c_val_scatter = None
             cmap_val_scatter = (
-                None  # Define cmap_val_scatter to avoid UnboundLocalError
+                None                                                      
             )
             if cluster_ids is not None:
                 c_val_scatter = cluster_ids_for_coloring[patch_mask]
@@ -583,77 +583,77 @@ def plot_2d_scatter(
                 "s": 100,
                 "label": label_text,
             }
-            if c_val_scatter is not None:  # Check c_val_scatter
+            if c_val_scatter is not None:                       
                 scatter_args["c"] = c_val_scatter
                 scatter_args["cmap"] = cmap_val_scatter
 
             ax.scatter(
-                transformed[patch_mask, 0],  # PC1
-                transformed[patch_mask, 1],  # PC2
+                transformed[patch_mask, 0],       
+                transformed[patch_mask, 1],       
                 **scatter_args,
             )
-    else:  # No patch_type
+    else:                 
         c_val_scatter_else = None
         if cluster_ids is not None:
             c_val_scatter_else = (
-                cluster_ids_for_coloring  # Use 0-indexed IDs for coloring
+                cluster_ids_for_coloring                                  
             )
 
-        # cmap is already defined based on cluster_ids_for_coloring
+                                                                   
 
         scatter_args_else = {"marker": "o", "alpha": 0.6, "s": 100}
         if (
             c_val_scatter_else is not None
-        ):  # Check c_val_scatter_else instead of cluster_ids
+        ):                                                   
             scatter_args_else["c"] = c_val_scatter_else
-            scatter_args_else["cmap"] = cmap  # Use the globally defined cmap
+            scatter_args_else["cmap"] = cmap                                 
 
         ax.scatter(
-            transformed[:, 0],  # PC1
-            transformed[:, 1],  # PC2
+            transformed[:, 0],       
+            transformed[:, 1],       
             **scatter_args_else,
         )
 
-    # Add labels and title with adjusted padding
+                                                
     ax.set_xlabel("1st Latent Dim.", fontsize=20)
     ax.set_ylabel("2nd Latent Dim.", fontsize=20)
     ax.set_title(title, fontsize=30)
 
-    # no spines for right and top
+                                 
     ax.spines["right"].set_visible(False)
     ax.spines["top"].set_visible(False)
 
-    # Add colorbar with discrete levels
+                                       
     if (
         cluster_ids is not None
-    ):  # Simplified condition: show colorbar if cluster_ids are present
+    ):                                                                  
         try:
-            # Use an invisible scatter plot with all data points for a robust
-            # colorbar. Ensure this uses the 0-indexed
-            # cluster_ids_for_coloring for correct color mapping
+                                                                             
+                                                      
+                                                                
             ax.scatter(
                 transformed[:, 0],
                 transformed[:, 1],
-                c=cluster_ids_for_coloring,  # Use 0-indexed IDs for mapping
-                cmap=cmap,  # Use the main cmap
+                c=cluster_ids_for_coloring,                                 
+                cmap=cmap,                     
                 s=0,
                 alpha=0,
             )
-            # # Ticks should correspond to original unique cluster ID values
-            # if len(original_unique_ids) > 1 or (
-            #     len(original_unique_ids) == 1 and original_unique_ids[0] != 0
-            # ):  # Only show colorbar if meaningful clusters
-            #     colorbar = plt.colorbar(
-            #         temp_scatter_for_colorbar,
-            #         ticks=original_unique_ids,
-            #         shrink=0.4,
-            #     )
-            #     colorbar.set_label(cluster_label, fontsize=20)
+                                                                            
+                                                  
+                                                                               
+                                                             
+                                          
+                                                
+                                                
+                                 
+                   
+                                                                
         except Exception:
-            pass  # Silently pass
+            pass                 
 
     if patch_type is not None:
-        # Create custom legend handles for black markers
+                                                        
         legend_handles = []
         unique_patches_for_legend = np.unique(np.array(patch_type))
         for i, patch_val in enumerate(unique_patches_for_legend):
@@ -672,9 +672,9 @@ def plot_2d_scatter(
             ax.legend(handles=legend_handles, title="Patch Types", loc="best")
 
     fig.tight_layout()
-    # Remove subplot_adjust for legend as it's now inside
-    # if patch_type is not None and legend_handles:
-    #     plt.subplots_adjust(right=0.75)
+                                                         
+                                                   
+                                         
 
     return fig, ax
 
@@ -690,11 +690,11 @@ def plot_3d_scatter(
     from matplotlib.lines import Line2D
     from matplotlib.colors import ListedColormap
 
-    # Create figure and 3D axes with adjusted size and spacing
+                                                              
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection="3d", computed_zorder=False)
 
-    # Prepare cluster IDs and colormap
+                                      
     if cluster_ids is not None:
         original_unique_ids, cluster_ids_for_coloring = np.unique(
             cluster_ids, return_inverse=True
@@ -705,7 +705,7 @@ def plot_3d_scatter(
         original_unique_ids = [0]
         num_distinct_colors = 1
 
-    # Create discrete colormap
+                              
     base_colors = [
         "green",
         "red",
@@ -748,21 +748,21 @@ def plot_3d_scatter(
             scatter_args = {
                 "marker": current_marker,
                 "alpha": 0.6,
-                "s": 20,  # Keep user's marker size for 3D
+                "s": 20,                                  
                 "label": label_text,
-                # Removed vmin and vmax
+                                       
             }
             if c_val_scatter is not None:
                 scatter_args["c"] = c_val_scatter
                 scatter_args["cmap"] = cmap_val_scatter
 
             scatter = ax.scatter(
-                transformed[patch_mask, 0],  # PC1
-                transformed[patch_mask, 1],  # PC2
-                transformed[patch_mask, 2],  # PC3
+                transformed[patch_mask, 0],       
+                transformed[patch_mask, 1],       
+                transformed[patch_mask, 2],       
                 **scatter_args,
             )
-    else:  # No patch_type
+    else:                 
         c_val_scatter_else = None
         if cluster_ids is not None:
             c_val_scatter_else = cluster_ids_for_coloring
@@ -770,52 +770,52 @@ def plot_3d_scatter(
         scatter_args_else = {
             "marker": "o",
             "alpha": 0.6,
-            "s": 20,  # Keep user's marker size for 3D
-            # Removed vmin and vmax
+            "s": 20,                                  
+                                   
         }
         if c_val_scatter_else is not None:
             scatter_args_else["c"] = c_val_scatter_else
             scatter_args_else["cmap"] = cmap
 
         scatter = ax.scatter(
-            transformed[:, 0],  # PC1
-            transformed[:, 1],  # PC2
-            transformed[:, 2],  # PC3
+            transformed[:, 0],       
+            transformed[:, 1],       
+            transformed[:, 2],       
             **scatter_args_else,
         )
 
-    # Add labels and title with adjusted padding
+                                                
     ax.set_xlabel("1st Latent Dim.", labelpad=-15, fontsize=8)
     ax.set_ylabel("2nd Latent Dim.", labelpad=-15, fontsize=8)
     ax.set_zlabel(
         "3rd Latent Dim.", labelpad=-17, rotation=90, fontsize=8
-    )  # Increased labelpad and rotated label
+    )                                        
     ax.set_title(title, y=0.95)
 
-    # Add colorbar with discrete levels
-    if cluster_ids is not None:  # Simplified condition
+                                       
+    if cluster_ids is not None:                        
         try:
             temp_scatter_for_colorbar = ax.scatter(
                 transformed[:, 0],
                 transformed[:, 1],
                 transformed[:, 2],
-                c=cluster_ids_for_coloring,  # Use 0-indexed IDs
+                c=cluster_ids_for_coloring,                     
                 cmap=cmap,
                 s=0,
                 alpha=0,
             )
-            # if len(original_unique_ids) > 1 or (
-            #     len(original_unique_ids) == 1 and original_unique_ids[0] != 0
-            # ):
-            #     colorbar = plt.colorbar(
-            #         temp_scatter_for_colorbar, ticks=original_unique_ids, shrink=0.4
-            #     )
-            #     colorbar.set_label(cluster_label)
+                                                  
+                                                                               
+                
+                                          
+                                                                                      
+                   
+                                                   
         except Exception:
-            pass  # Silently pass
+            pass                 
 
     if patch_type is not None:
-        # Create custom legend handles for black markers
+                                                        
         legend_handles_3d = []
         unique_patches_for_legend_3d = np.unique(np.array(patch_type))
         for i, patch_val in enumerate(unique_patches_for_legend_3d):
@@ -838,11 +838,11 @@ def plot_3d_scatter(
                 bbox_to_anchor=(0.9, 0.5),
             )
 
-    # Adjust the view angle for better visualization
+                                                    
     ax.view_init(elev=20, azim=45)
 
-    # Adjust layout with specific spacing - remove specific adjustments for
-    # external legend
+                                                                           
+                     
     plt.subplots_adjust(left=0.05, right=0.9, top=0.9, bottom=0.05)
     fig.tight_layout()
     return fig, ax

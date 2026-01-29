@@ -34,9 +34,9 @@ Constraint mapping:
 ================================================================================
 """
 
-# =============================================================================
-# Standard library imports
-# =============================================================================
+                                                                               
+                          
+                                                                               
 import json
 import hashlib
 import logging
@@ -50,12 +50,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# =============================================================================
-# ShinkaEvolve core imports
-# =============================================================================
-# EvolutionRunner: base class for the evolution loop (we extend it with repair logic)
-# EvolutionConfig: evolution algorithm configuration
-# RunningJob: a running evaluation job
+                                                                               
+                           
+                                                                               
+                                                                                     
+                                                    
+                                      
 from shinka.core.runner import (
     EvolutionRunner,
     EvolutionConfig,
@@ -63,20 +63,20 @@ from shinka.core.runner import (
     FOLDER_PREFIX,
     _lean_local_diff_stats,
 )
-# DatabaseConfig: database configuration
-# Program: stored program object
+                                        
+                                
 from shinka.database import DatabaseConfig, Program
-# JobConfig: job configuration
+                              
 from shinka.launch import JobConfig
-# extract_between: helper to extract code blocks from text
+                                                          
 from shinka.llm import extract_between
 from placeholder_guard import is_trivial_tautology_placeholder
 
-# Model adapter layer: parse outputs from different model families.
+                                                                   
 try:
     from model_adapters import get_model_adapter, is_kimina_model
 except ImportError:
-    # If model_adapters is unavailable, fall back to no-op stubs.
+                                                                 
     def get_model_adapter(model_name):
         return None
     def is_kimina_model(model_name):
@@ -180,9 +180,9 @@ def _read_metrics_json(results_dir: str) -> Dict[str, Any]:
         return {}
 
 
-# =============================================================================
-# Configuration
-# =============================================================================
+                                                                               
+               
+                                                                               
 
 @dataclass
 class RepairConfig:
@@ -194,15 +194,15 @@ class RepairConfig:
     - repair_temperature uses a moderate temperature to reduce no-op retries.
     - enabled can be turned off via CLI for debugging/ablations.
     """
-    # How many initial candidates to try at generation 0 (fixed strategy A).
+                                                                            
     num_init_candidates_gen0: int = 3
 
-    # Default compile-repair budget for gen>=1.
-    # SPEC v1.0: for generation >= 1, allow at most 2 repair attempts.
+                                               
+                                                                      
     max_repair_attempts: int = 2
-    # Allow a larger budget for generation 0 bootstrapping.
-    # Rationale: Lean4 statements often start non-compiling; a few extra repair
-    # attempts can quickly move the run into the feasible region.
+                                                           
+                                                                               
+                                                                 
     max_repair_attempts_gen0: int = 5
     repair_temperature: float = 0.7
     enabled: bool = True
@@ -224,20 +224,20 @@ class TerminationConfig:
        - triggers a "soft reset" (e.g., more diversity / crossover)
        - after too many soft resets, the run stops
     """
-    # Budget limits (hard stop)
+                               
     max_llm_calls: Optional[int] = None
     max_evals: Optional[int] = None
     max_time_seconds: Optional[float] = None
 
-    # Stagnation detection (soft stop)
+                                      
     stagnation_generations: int = 5
     max_soft_resets: int = 3
 
-    # Soft reset actions
+                        
     reset_temperature_boost: float = 0.2
     reset_crossover_boost: float = 0.1
-    # Increase parent diversity pressure under weighted sampling by boosting the
-    # shared usage-penalty knob (also used by cycle-softmax).
+                                                                                
+                                                             
     reset_parent_usage_penalty_boost: float = 0.5
     reset_parent_usage_penalty_max: float = 5.0
 
@@ -275,9 +275,9 @@ class RepairQueueItem:
     total_repair_llm_calls_used: int = 0
 
 
-# =============================================================================
-# Failure Buffer (Constraint B)
-# =============================================================================
+                                                                               
+                               
+                                                                               
 
 @dataclass
 class FailureRecord:
@@ -340,7 +340,7 @@ class FailureBuffer:
                 "generation": r.generation,
                 "compile_error_type": r.compile_error_type,
                 "compile_error_msg": r.compile_error_msg,
-                "statement": r.statement[:500],  # truncate to save space
+                "statement": r.statement[:500],                          
                 "repair_attempts": r.repair_attempts,
                 "repair_llm_calls_used": int(getattr(r, "repair_llm_calls_used", 0) or 0),
                 "final_status": r.final_status,
@@ -382,9 +382,9 @@ class FailureBuffer:
         }
 
 
-# =============================================================================
-# Repair prompt construction
-# =============================================================================
+                                                                               
+                            
+                                                                               
 
 LEAN_DECL_KEYWORDS = [
     "theorem",
@@ -457,7 +457,7 @@ def extract_first_declaration(text: str) -> str:
             decl_idx = i
             break
     if decl_idx is None:
-        return ""  # Fix: return empty string when no declaration is found.
+        return ""                                                          
     start = decl_idx
     while start > 0 and lines[start - 1].lstrip().startswith("@["):
         start -= 1
@@ -478,7 +478,7 @@ def normalize_lean_statement(text: str) -> str:
     if not text:
         return ""
 
-    # Fix: filter common placeholders (models sometimes emit these as "no result" markers).
+                                                                                           
     INVALID_PLACEHOLDERS = {"none", "null", "nil", "n/a", "na", ""}
     text_lower = text.strip().lower()
     if text_lower in INVALID_PLACEHOLDERS:
@@ -489,7 +489,7 @@ def normalize_lean_statement(text: str) -> str:
     cleaned = strip_evolve_markers(cleaned)
     result = extract_first_declaration(cleaned)
 
-    # Fix: re-check the extracted statement for placeholders.
+                                                             
     if result and result.strip().lower() in INVALID_PLACEHOLDERS:
         return ""
 
@@ -554,9 +554,9 @@ def extract_best_lean_code_block_with_source(
         if normalize_lean_statement(cand):
             return cand, fence_source
 
-    # Fallback (no code fence): some models output plain-text Lean code and may
-    # echo previous attempts. Prefer the *last* top-level declaration (ideally a
-    # theorem) to avoid reusing the original failing statement.
+                                                                               
+                                                                                
+                                                               
     text = str(raw_content)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     text = strip_evolve_markers(text)
@@ -597,8 +597,8 @@ def extract_best_lean_code_block_with_source(
 
     end = _cut_end_at_sorry(start)
 
-    # Include a reasonable header/preamble: start from the last `import Mathlib`
-    # before the selected declaration (if present).
+                                                                                
+                                                   
     import_mathlib_idx = None
     import_any_idx = None
     for i in range(0, start):
@@ -629,7 +629,7 @@ def extract_best_lean_code_block_with_source(
     header_lines = [ln for ln in lines[header_start:start] if _is_preamble_line(ln)]
     decl_lines = lines[start:end]
 
-    # Ensure required imports exist (repair protocol expects them).
+                                                                   
     has_mathlib = any(ln.strip().startswith("import Mathlib") for ln in header_lines)
     has_aesop = any(ln.strip().startswith("import Aesop") for ln in header_lines)
     if not has_mathlib:
@@ -752,9 +752,9 @@ def rebase_lean_candidate_on_parent_preamble_if_missing(
 
 
 def _strip_attribute_lines(stmt: str) -> str:
-    # Drop leading attribute annotations like:
-    # @[simp]
-    # @[aesop]
+                                              
+             
+              
     if not stmt:
         return ""
     return re.sub(r"(?m)^\s*@\[.*\]\s*\n?", "", stmt).strip()
@@ -777,13 +777,13 @@ def _canonicalize_lean_for_exact_match(text: str) -> str:
     if not stmt:
         return ""
 
-    # Normalize whitespace aggressively to avoid "same statement, different spacing".
+                                                                                     
     stmt = re.sub(r"\s+", " ", stmt).strip()
 
-    # Treat lemma as theorem for duplicate detection (we enforce theorem-only outputs).
+                                                                                       
     stmt = re.sub(r"^(noncomputable\s+)?lemma\b", r"\1theorem", stmt)
 
-    # Normalize the declaration name (theorem my_xxx ...) to reduce superficial variance.
+                                                                                         
     stmt = re.sub(
         r"^(noncomputable\s+)?(theorem|def|definition|example|axiom|abbrev|instance)\s+[^\s:(]+",
         r"\1\2 __NAME__",
@@ -889,7 +889,7 @@ IMPORTANT:
 """
 
     orig_code = (original_code or "").strip()
-    # NOTE: Do NOT inject dataset headers into prompts (avoid contamination).
+                                                                             
     ref_hdr_block = ""
 
     user_msg = f"""Natural language statement:
@@ -961,7 +961,7 @@ Rules:
 - Include exactly one theorem, ending with `:= by sorry`.
 """
 
-    # NOTE: Do NOT inject dataset headers into prompts (avoid contamination).
+                                                                             
     ref_hdr_block = ""
 
     prev_compile = (previous_compile_error or "").strip()
@@ -1019,9 +1019,9 @@ def _extract_accuracy_confirmation_from_critic_raw(reasons: str) -> str:
     return s[m2.end() :].lstrip(" :\\n\\t").strip()
 
 
-# =============================================================================
-# AutoformalizationRunner
-# =============================================================================
+                                                                               
+                         
+                                                                               
 
 class AutoformalizationRunner(EvolutionRunner):
     """
@@ -1071,32 +1071,32 @@ class AutoformalizationRunner(EvolutionRunner):
             problem_config: problem config (informal, header, etc.)
             verbose: enable verbose logging
         """
-        # Call parent constructor.
+                                  
         super().__init__(evo_config, job_config, db_config, verbose)
 
-        # Repair config.
+                        
         self.repair_config = repair_config or RepairConfig()
 
-        # Termination config.
+                             
         self.termination_config = termination_config or TerminationConfig()
 
-        # Problem config (informal, header, etc.).
+                                                  
         self.problem_config = problem_config or self._load_problem_config()
 
-        # Optional experiment knobs (wired via env/launcher for reproducibility).
-        #
-        # - EvolAST fallback: if enabled, we may apply deterministic AST rewrites on the parent
-        #   when the LLM patch is an exact duplicate (and repair is disabled), to avoid "no-op" collapse.
-        # - Seedbank debit: if enabled, count each seedbank seed as N "budget calls" (fairness).
-        # Paper-aligned default: EvolAST fallback is enabled unless explicitly disabled.
-        # Set `AUTOFORMAL_ENABLE_EVOLAST_FALLBACK=0` to disable (e.g., for ablations).
+                                                                                 
+         
+                                                                                               
+                                                                                                         
+                                                                                                
+                                                                                        
+                                                                                      
         self.enable_evolast_fallback: bool = _env_truthy("AUTOFORMAL_ENABLE_EVOLAST_FALLBACK", default=True)
         self.seedbank_debit_calls: bool = _env_truthy("AUTOFORMAL_SEEDBANK_DEBIT_CALLS", default=False)
         self.seedbank_calls_per_seed: int = int(_env_int("AUTOFORMAL_SEEDBANK_CALLS_PER_SEED") or 0)
         self.seedbank_debit_seed0: bool = _env_truthy("AUTOFORMAL_SEEDBANK_DEBIT_SEED0", default=False)
         self.seedbank_debited_calls: int = 0
 
-        # LLM mode (real/mock/replay/auto fallback) + audit metadata.
+                                                                     
         self.llm_mode_requested: str = ""
         self.llm_mode_effective: str = ""
         self.llm_unavailable: bool = False
@@ -1106,15 +1106,15 @@ class AutoformalizationRunner(EvolutionRunner):
             or os.environ.get("AUTOFORMAL_BASELINE_MODE", "ours")
             or "ours"
         ).strip()
-        # Global kill-switch: disable semantic evaluation/repair end-to-end.
+                                                                            
         if _env_truthy("AUTOFORMAL_DISABLE_SEMANTIC", default=False):
             try:
                 self.problem_config["use_semantic"] = False
             except Exception:
                 pass
-        # Semantic repair:
-        # - Requires `use_semantic=true` (otherwise semantic_ok is N/A).
-        # - Default: OFF (opt-in), but can be explicitly enabled via env/config.
+                          
+                                                                        
+                                                                                
         env_val = os.environ.get("AUTOFORMAL_ENABLE_SEMANTIC_REPAIR")
         cfg_val = self.problem_config.get("enable_semantic_repair", None)
         if env_val is not None and str(env_val).strip() != "":
@@ -1138,14 +1138,14 @@ class AutoformalizationRunner(EvolutionRunner):
         )
         self.semantic_repair_temperature: float = _env_float("AUTOFORMAL_SEMANTIC_REPAIR_TEMPERATURE", 0.7)
 
-        # Optional: stage semantic repair to late budget, to avoid burning early exploration calls.
-        # If unset or <=0, semantic repair can run immediately when enabled.
+                                                                                                   
+                                                                            
         self.semantic_repair_start_calls: Optional[int] = _env_int("AUTOFORMAL_SEMANTIC_REPAIR_START_CALLS")
         if self.semantic_repair_start_calls is not None and int(self.semantic_repair_start_calls) <= 0:
             self.semantic_repair_start_calls = None
 
-        # Optional: skip compile-repair for certain compile error types (budget triage).
-        # Example: AUTOFORMAL_REPAIR_SKIP_ERROR_TYPES=typeclass_error
+                                                                                        
+                                                                     
         self.repair_skip_error_types: set[str] = {
             t.strip().lower() for t in _env_csv_list("AUTOFORMAL_REPAIR_SKIP_ERROR_TYPES")
         }
@@ -1154,14 +1154,14 @@ class AutoformalizationRunner(EvolutionRunner):
         self._write_run_metadata()
         self._write_run_config()
 
-        # Repair Queue: candidates that require repair.
+                                                       
         self.repair_queue: List[RepairQueueItem] = []
 
-        # Failure Buffer: record all failures (constraint B).
+                                                             
         failure_buffer_path = f"{self.results_dir}/failure_buffer.json"
         self.failure_buffer = FailureBuffer(failure_buffer_path)
 
-        # Budget tracking (constraint C).
+                                         
         self.total_repair_llm_calls = 0
         self.total_repair_evals = 0
         self.total_repair_cost = 0.0
@@ -1170,7 +1170,7 @@ class AutoformalizationRunner(EvolutionRunner):
         self.total_semantic_repair_cost = 0.0
         self.total_semantic_repair_successes = 0
 
-        # Termination tracking.
+                               
         self.start_time = time.time()
         self.soft_resets_count = 0
         self.best_fitness_tuple: Optional[tuple] = None
@@ -1178,12 +1178,12 @@ class AutoformalizationRunner(EvolutionRunner):
         self.termination_reason: Optional[str] = None
         self._last_meta_update_generation: int = -1
 
-        # File-seed0 pruning: once other compile_ok=1 programs enter the archive, prune the seed0
-        # program that came from `--init_program` (file-seed0 only) to avoid long-term dependence
-        # on placeholders.
+                                                                                                 
+                                                                                                 
+                          
         self._file_seed0_pruned: bool = False
 
-        # Log init info.
+                        
         logger.info("=" * 60)
         logger.info("AutoformalizationRunner initialized (spec v1.2)")
         logger.info(f"  Repair enabled: {self.repair_config.enabled}")
@@ -1232,16 +1232,16 @@ class AutoformalizationRunner(EvolutionRunner):
         self.llm_unavailable = False
         self.llm_unavailable_reason = ""
 
-        # Hard override: `no_llm` disables all external LLM usage.
+                                                                  
         if no_llm:
-            # Preserve the original model name for dynamic sampling compatibility
+                                                                                 
             original_model_name = self.llm.model_names[0] if hasattr(self.llm, 'model_names') and self.llm.model_names else "mock"
             self.llm = MockLLMClient(statements=mock_statements, model_name=original_model_name)
             self.llm_mode_effective = "mock"
             self.llm_unavailable = True
             self.llm_unavailable_reason = "no_llm=1"
         elif requested == "mock":
-            # Preserve the original model name for dynamic sampling compatibility
+                                                                                 
             original_model_name = self.llm.model_names[0] if hasattr(self.llm, 'model_names') and self.llm.model_names else "mock"
             self.llm = MockLLMClient(statements=mock_statements, model_name=original_model_name)
             self.llm_mode_effective = "mock"
@@ -1254,7 +1254,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 self.llm_unavailable = True
                 self.llm_unavailable_reason = f"llm_mode=replay:{replay_path}"
             except Exception as e:
-                # Replay is optional; fallback to MockLLM to keep runs usable.
+                                                                              
                 original_model_name = self.llm.model_names[0] if hasattr(self.llm, 'model_names') and self.llm.model_names else "mock"
                 self.llm = MockLLMClient(statements=mock_statements, model_name=original_model_name)
                 self.llm_mode_effective = "mock"
@@ -1276,10 +1276,10 @@ class AutoformalizationRunner(EvolutionRunner):
             else:
                 self.llm_mode_effective = "real"
         else:
-            # requested == "real" (or unknown): keep the default LLMClient from base runner.
+                                                                                            
             self.llm_mode_effective = "real"
 
-        # When using offline generation, disable meta-LLM & novelty-LLM to avoid hidden calls.
+                                                                                              
         if self.llm_mode_effective in {"mock", "replay"}:
             self.meta_llm = None
             self.novelty_llm = None
@@ -1292,12 +1292,12 @@ class AutoformalizationRunner(EvolutionRunner):
             except Exception:
                 pass
 
-        # Patch-only LLM override: allow using a different model (and optionally base_url)
-        # for edit proposals, while keeping Gen0 sampling on the main generator model.
-        #
-        # Env:
-        # - AUTOFORMAL_PATCH_OPENAI_LLM_BASE_URL (optional; empty uses OPENAI_LLM_BASE_URL/OpenAI SDK default)
-        # - AUTOFORMAL_PATCH_LLM_MODELS (comma-separated; when set, enables patch override)
+                                                                                          
+                                                                                      
+         
+              
+                                                                                                              
+                                                                                           
         self.patch_llm = self.llm
         self.patch_llm_enabled = False
         if self.llm_mode_effective == "real":
@@ -1325,10 +1325,10 @@ class AutoformalizationRunner(EvolutionRunner):
                     self.patch_llm = self.llm
                     self.patch_llm_enabled = False
 
-        # Enforce strict generator-call budget across ALL generation-side LLM clients.
-        #
-        # - We cap both `self.llm` and `self.patch_llm` dynamically (see `_sync_generation_llm_budget_caps`)
-        #   so internal retries cannot overshoot `max_llm_calls`.
+                                                                                      
+         
+                                                                                                            
+                                                                 
         try:
             self._sync_generation_llm_budget_caps()
         except Exception:
@@ -1599,7 +1599,7 @@ class AutoformalizationRunner(EvolutionRunner):
         """
         candidate_paths = [
             Path(str(self.results_dir)) / "problem_config.json",
-            Path(__file__).parent / "problem_config.json",  # legacy fallback
+            Path(__file__).parent / "problem_config.json",                   
         ]
         for config_path in candidate_paths:
             if config_path.exists():
@@ -1608,7 +1608,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 if self.verbose:
                     logger.info(f"[Config] Loaded problem config from: {config_path}")
                 return cfg
-        # Default config (for tests or when config file is missing).
+                                                                    
         return {
             "informal": "",
             "header": "import Mathlib",
@@ -1631,23 +1631,23 @@ class AutoformalizationRunner(EvolutionRunner):
         import re
 
         llm_kwargs = self.llm.get_kwargs()
-        # SPEC v1.0: Gen0 temperature=0.5 (repair uses 0.0 separately; evolution uses llm_kwargs default).
+                                                                                                          
         llm_kwargs["temperature"] = 0.5
         model_name = self.evo_config.llm_models[0] if self.evo_config.llm_models else ""
         adapter = get_model_adapter(model_name)
         total_costs = 0.0
 
-        # Get problem info.
+                           
         informal = self.problem_config.get("informal", "")
         header = self.problem_config.get("header", "import Mathlib")
 
-        # Choose prompt strategy by model type.
+                                               
         if adapter and is_kimina_model(model_name):
-            # Kimina models use a simpler prompt.
+                                                 
             sys_msg, user_msg = adapter.build_prompt(informal, header)
             logger.info(f"[Gen0] Using Kimina adapter for model: {model_name}")
         else:
-            # General models use the default prompt.
+                                                    
             sys_msg, user_msg = self.prompt_sampler.initial_program_prompt()
 
         msg_history = []
@@ -1688,12 +1688,12 @@ class AutoformalizationRunner(EvolutionRunner):
 
             total_costs += response.cost or 0
 
-            # Use adapter to parse output (if available).
+                                                         
             initial_code = None
             if adapter:
                 initial_code = adapter.parse_output(response.content)
 
-            # Fallback: try standard code-fence extraction.
+                                                           
             if not initial_code:
                 initial_code = extract_between(
                     response.content,
@@ -1702,15 +1702,15 @@ class AutoformalizationRunner(EvolutionRunner):
                     False,
                 )
 
-            # Fallback: extract a declaration directly from the raw response.
+                                                                             
             if not initial_code and self.evo_config.language == "lean":
-                # Extract a full Lean file (imports + theorem) from the raw model output.
+                                                                                         
                 cand = normalize_lean_code(response.content or "")
                 if cand and normalize_lean_statement(cand):
                     initial_code = cand
 
             if initial_code:
-                # Hard filter: forbid trivial/tautological placeholders as initial programs.
+                                                                                            
                 if self.evo_config.language == "lean" and is_trivial_tautology_placeholder(initial_code):
                     if self.verbose:
                         logger.info(
@@ -1750,7 +1750,7 @@ class AutoformalizationRunner(EvolutionRunner):
                     )
                 return initial_code, patch_name, patch_description, total_costs
 
-            # Extraction failed; retry.
+                                       
             if self.verbose:
                 logger.info(
                     f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
@@ -1865,7 +1865,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 f"Max Patch Attempts: {max_patch_attempts}"
             )
 
-        # Ensure the output file always exists with a non-placeholder baseline.
+                                                                               
         exec_path = Path(self.results_dir) / f"{FOLDER_PREFIX}_{generation}" / f"main.{self.lang_ext}"
         try:
             exec_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1873,10 +1873,10 @@ class AutoformalizationRunner(EvolutionRunner):
         except Exception:
             pass
 
-        # Get current meta recommendations
+                                          
         meta_recs, _, _ = self.meta_summarizer.get_current()
 
-        # Optional: staged patch schedule (budget-based).
+                                                         
         self._maybe_apply_staged_patch_schedule()
 
         patch_sys, patch_msg, patch_type = self.prompt_sampler.sample(
@@ -1992,9 +1992,9 @@ class AutoformalizationRunner(EvolutionRunner):
                 verbose=False,
             )
 
-            # Success: patch applied, but we may still hard-reject placeholders.
+                                                                                
             if error_attempt is None and num_applied_attempt > 0 and updated_code_attempt is not None:
-                # Policy: if the patch model outputs NO explicit header/preamble, inherit from parent.
+                                                                                                      
                 if self.evo_config.language == "lean":
                     rebased, did_rebase, _reason = rebase_lean_candidate_on_parent_preamble_if_missing(
                         candidate_code=updated_code_attempt,
@@ -2006,9 +2006,9 @@ class AutoformalizationRunner(EvolutionRunner):
                             exec_path.write_text(rebased, encoding="utf-8")
                         except Exception:
                             pass
-                        # IMPORTANT: `apply_full_patch` already wrote `edit.diff`, but after
-                        # we rebase the candidate, `main.lean` no longer matches that diff.
-                        # Overwrite `edit.diff` so audits reflect the FINAL evaluated file.
+                                                                                            
+                                                                                           
+                                                                                           
                         if patch_path:
                             patch_txt_attempt = overwrite_edit_diff_for_final_candidate(
                                 patch_path=Path(patch_path),
@@ -2025,12 +2025,12 @@ class AutoformalizationRunner(EvolutionRunner):
                             f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} REJECTED. "
                             "Reason: trivial/tautological statement."
                         )
-                    # Restore non-placeholder baseline so we never submit/eval placeholder code.
+                                                                                                
                     try:
                         exec_path.write_text(parent_program.code or "", encoding="utf-8")
                     except Exception:
                         pass
-                    # Ask the model to try again (same parent/inspirations).
+                                                                            
                     patch_msg = (
                         "The previous output is INVALID because it produced a trivial placeholder theorem. "
                         "This is forbidden.\n\n"
@@ -2049,7 +2049,7 @@ class AutoformalizationRunner(EvolutionRunner):
                     num_applied_attempt = 0
                     continue
 
-                # Enforce theorem-only protocol (GTED tooling assumes theorem).
+                                                                               
                 if self.evo_config.language == "lean" and not _is_theorem_statement(updated_code_attempt):
                     error_attempt = "Rejected output protocol: statement must start with `theorem`."
                     if self.verbose:
@@ -2077,12 +2077,12 @@ class AutoformalizationRunner(EvolutionRunner):
                     num_applied_attempt = 0
                     continue
 
-                # Detect exact duplicates of parent/cross inspirations (Lean only).
-                #
-                # IMPORTANT (fairness):
-                # We do NOT resample here, because rejection sampling changes the generator-call
-                # distribution. Instead we record the duplication and rely on archive-level
-                # deduplication to prevent duplicates from occupying archive slots.
+                                                                                   
+                 
+                                       
+                                                                                                
+                                                                                           
+                                                                                   
                 if self.evo_config.language == "lean":
                     cand_key = _canonicalize_lean_for_exact_match(updated_code_attempt)
                     parent_key = _canonicalize_lean_for_exact_match(parent_program.code or "")
@@ -2111,7 +2111,7 @@ class AutoformalizationRunner(EvolutionRunner):
                             f"Exact duplicate detected ({exact_duplicate_target})."
                         )
 
-                    # Optional: treat exact duplicates as "dead-ends" and apply EvolAST fallback on parent.
+                                                                                                           
                     if exact_duplicate_detected and self.enable_evolast_fallback:
                         try:
                             from evolast_lean import apply_evolast_to_lean_code, parse_rule_weights
@@ -2148,7 +2148,7 @@ class AutoformalizationRunner(EvolutionRunner):
                                     exec_path.write_text(fallback_code, encoding="utf-8")
                                 except Exception:
                                     pass
-                                # Overwrite `edit.diff` to reflect the FINAL EvolAST candidate.
+                                                                                               
                                 if patch_path:
                                     patch_txt_attempt = overwrite_edit_diff_for_final_candidate(
                                         patch_path=Path(patch_path),
@@ -2159,7 +2159,7 @@ class AutoformalizationRunner(EvolutionRunner):
                                 evolast_fallback_used = True
                                 evolast_fallback_reason = f"llm_exact_duplicate_{exact_duplicate_target or 'parent'}"
                                 evolast_fallback_info = info if isinstance(info, dict) else {"info": str(info)}
-                                # Make the mutation visible in analysis/metrics as a separate patch type.
+                                                                                                         
                                 patch_type = "evolast"
                                 patch_name = f"evolast_{evolast_fallback_mode}"
                                 patch_description = "EvolAST fallback on parent after exact-duplicate LLM patch."
@@ -2169,7 +2169,7 @@ class AutoformalizationRunner(EvolutionRunner):
                                     f"[EvolAST] Fallback skipped (error): {type(e).__name__}: {e}"
                                 )
 
-                # Accepted patch: compute diff summaries/stats for audit.
+                                                                         
                 if patch_path:
                     diff_summary = summarize_diff(str(patch_path))
                 if patch_type == "diff" and self.evo_config.language == "lean":
@@ -2182,7 +2182,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 code_diff = patch_txt_attempt
                 break
 
-            # Failure: prepare retry prompt
+                                           
             error_str = str(error_attempt) if error_attempt else "No changes applied."
             patch_msg = (
                 "The previous edit was not successful. This was the error message:\n\n"
@@ -2205,7 +2205,7 @@ class AutoformalizationRunner(EvolutionRunner):
             msg_history = response.new_msg_history
             code_diff = None
 
-        # Only consider the diff summary for the original source file
+                                                                     
         original_filename = f"original.{self.lang_ext}"
         if original_filename in diff_summary:
             diff_summary = diff_summary[original_filename]
@@ -2259,8 +2259,8 @@ class AutoformalizationRunner(EvolutionRunner):
         inserted_programs: List[Program] = []
         best_score: Optional[float] = None
 
-        # NOTE: Some unit tests construct the runner via `__new__` and set only a
-        # minimal subset of fields. In those cases, `problem_config` may not exist.
+                                                                                 
+                                                                                   
         problem_cfg = getattr(self, "problem_config", None)
         if not isinstance(problem_cfg, dict):
             problem_cfg = {}
@@ -2311,8 +2311,8 @@ class AutoformalizationRunner(EvolutionRunner):
         i = 0
         seed_bank_exhausted = False
         while True:
-            # Keep the original behavior of attempting `min_num_init` seeds for
-            # diversity, but prevent Gen0 from hard-failing when none compiles.
+                                                                               
+                                                                               
             if i >= min_num_init and _has_non_placeholder_seed(inserted_programs):
                 break
 
@@ -2335,19 +2335,19 @@ class AutoformalizationRunner(EvolutionRunner):
             patch_description = "Initial program."
             patch_type = "init"
 
-            # Seed bank (recommended): reuse pre-generated gen0 solutions for ALL seeds.
-            #
-            # When `init_programs_dir` is set:
-            # - Gen0 does NOT call the LLM
-            # - Every seed_i/main.lean is copied from the seed bank
-            #
-            # Otherwise:
-            # - Seed 0 can reuse a provided initial program file; others are sampled with LLM.
-            #
-            # NOTE: `--init_program` is allowed to be a compile-safe placeholder (e.g. `: True := by sorry`)
-            # for bootstrapping. This avoids runs crashing when Kimina fails to produce any compile_ok=1
-            # seeds in Gen0. Once any other compile_ok=1 program enters the archive, the pruning logic
-            # (`delete_file_seed0`) will remove the file seed0 (including island copies).
+                                                                                        
+             
+                                              
+                                          
+                                                                   
+             
+                        
+                                                                                              
+             
+                                                                                                            
+                                                                                                        
+                                                                                                      
+                                                                                         
             use_seed_bank = seed_bank_dir is not None and (not seed_bank_exhausted)
             use_init_file = (not use_seed_bank) and i == 0 and bool(self.evo_config.init_program_path)
             init_seed_source = "seed_bank" if use_seed_bank else "file" if use_init_file else "llm"
@@ -2363,9 +2363,9 @@ class AutoformalizationRunner(EvolutionRunner):
                             "or provide a seed bank that contains `seed_i/main.lean` for every i."
                         )
                     seed_bank_exhausted = True
-                    # If Gen0 already has at least one non-placeholder compile_ok=1 seed, we can stop
-                    # cleanly here; otherwise, fall back to LLM sampling to avoid hard failure on a
-                    # low-quality seedbank slice (e.g. first-k seeds all compile_fail for a problem).
+                                                                                                     
+                                                                                                   
+                                                                                                     
                     if _has_non_placeholder_seed(inserted_programs):
                         logger.warning(
                             f"[Gen0] Seed bank exhausted at seed={i} (missing: {src}); stopping bootstrapping."
@@ -2378,12 +2378,12 @@ class AutoformalizationRunner(EvolutionRunner):
                         f"[Gen0] Seed bank exhausted at seed={i} (missing: {src}) "
                         "AND no compile_ok=1 seed found; falling back to LLM sampling."
                     )
-                    # Retry the same `seed_i` with `use_seed_bank=False`.
+                                                                         
                     continue
                 shutil.copy(src, exec_fname)
                 patch_name = f"seedbank_seed_{i}"
                 patch_description = f"Initial program copied from seed bank: {src}"
-                # Optional: debit seedbank reuse toward the generation budget.
+                                                                              
                 if self.seedbank_debit_calls and self.seedbank_calls_per_seed > 0:
                     if i != 0 or self.seedbank_debit_seed0:
                         self.seedbank_debited_calls += int(self.seedbank_calls_per_seed)
@@ -2424,7 +2424,7 @@ class AutoformalizationRunner(EvolutionRunner):
             if use_seed_bank and reuse_seedbank_eval:
                 metrics_loaded = _load_seedbank_metrics(i)
                 if metrics_loaded is not None:
-                    # Mirror evaluator outputs for auditing/analysis scripts.
+                                                                             
                     try:
                         Path(results_dir, "metrics.json").write_text(
                             json.dumps(metrics_loaded, indent=2, ensure_ascii=False),
@@ -2443,7 +2443,7 @@ class AutoformalizationRunner(EvolutionRunner):
                     )
 
             if results is None:
-                # Evaluate synchronously
+                                        
                 results, rtime = self.scheduler.run(exec_fname, results_dir)
 
             metrics_val = results.get("metrics", {}) if results else {}
@@ -2452,7 +2452,7 @@ class AutoformalizationRunner(EvolutionRunner):
             compile_error_msg = metrics_val.get("compile_error_msg", "")
             statement = metrics_val.get("statement", "")
 
-            # Read evaluated code for DB insertion (if compile_ok=1)
+                                                                    
             try:
                 evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
             except Exception as e:
@@ -2477,11 +2477,11 @@ class AutoformalizationRunner(EvolutionRunner):
                     i += 1
                     continue
 
-                # Optional: skip compile repair for seedbank seeds.
-                #
-                # Motivation: seedbanks are typically built from already-evaluated candidates; if a seedbank
-                # entry is compile_fail, spending extra repair calls in Gen0 can burn a large fraction of the
-                # budget before evolution even starts.
+                                                                   
+                 
+                                                                                                            
+                                                                                                             
+                                                      
                 if init_seed_source == "seed_bank" and _env_truthy(
                     "AUTOFORMAL_SKIP_SEEDBANK_GEN0_REPAIR", default=False
                 ):
@@ -2541,10 +2541,10 @@ class AutoformalizationRunner(EvolutionRunner):
                 i += 1
                 continue
 
-            # compile_ok=1, but reject trivial placeholders from seed banks.
-            # Rationale: seed banks are meant to provide *real* initial solutions, and allowing
-            # `theorem ... : True := by sorry` to enter the archive can collapse the search
-            # when semantic/cycle are disabled or unavailable.
+                                                                            
+                                                                                               
+                                                                                           
+                                                              
             if (
                 init_seed_source == "seed_bank"
                 and self.evo_config.language == "lean"
@@ -2564,7 +2564,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 i += 1
                 continue
 
-            # compile_ok=1: insert into DB as a gen0 seed
+                                                         
             code_embedding, e_cost = self.get_code_embedding(exec_fname)
             combined_score = metrics_val.get("combined_score", 0.0)
             public_metrics = metrics_val.get("public", {})
@@ -2583,7 +2583,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 top_k_inspiration_ids=[],
                 code_diff=None,
                 embedding=code_embedding,
-                correct=True,  # correct ≡ compile_ok for autoformalization
+                correct=True,                                              
                 combined_score=combined_score,
                 public_metrics=public_metrics,
                 private_metrics=private_metrics,
@@ -2604,7 +2604,7 @@ class AutoformalizationRunner(EvolutionRunner):
                     "stdout_log": stdout_log,
                     "stderr_log": stderr_log,
                     "fitness_tuple": list(
-                        # fitness_tuple order: (compile_ok, beq_ok, semantic_ok, cycle_score)
+                                                                                             
                         metrics_val.get("fitness_tuple", (1, 0, 0, 0.0))
                     ),
                     "cycle_log_prob": metrics_val.get("cycle_log_prob", None),
@@ -2637,7 +2637,7 @@ class AutoformalizationRunner(EvolutionRunner):
             self.db.save()
             return
 
-        # Initialize bandit baseline from the best gen0 seed.
+                                                             
         if self.llm_selection is not None and best_score is not None:
             self.llm_selection.set_baseline_score(best_score)
 
@@ -2645,9 +2645,9 @@ class AutoformalizationRunner(EvolutionRunner):
         self._update_best_solution()
         logger.info(f"[Gen0] Bootstrapped {len(inserted_programs)} compile_ok=1 seeds")
 
-        # If seed0 came from a file (often a placeholder) and Gen0 already produced other
-        # compile_ok=1 seeds, prune file seed0 immediately so it does not dominate
-        # Gen>=1 parent/inspiration sampling.
+                                                                                         
+                                                                                  
+                                             
         if not self._file_seed0_pruned:
             has_non_file_seed = any(
                 str((p.metadata or {}).get("init_seed_source", "")).strip().lower()
@@ -2687,23 +2687,23 @@ class AutoformalizationRunner(EvolutionRunner):
         best_program = best_programs[0]
 
         if best_program.id == self.best_program_id:
-            return  # No change
+            return             
 
         self.best_program_id = best_program.id
 
-        # Locate the source path for the best program.
+                                                      
         gen_dir = Path(self.results_dir) / f"gen_{best_program.generation}"
         source_path = None
         matched_main_file = None
 
         if best_program.generation == 0:
-            # Gen 0: search inside seed directories for a matching file.
+                                                                        
             for seed_dir in sorted(gen_dir.glob("seed_*")):
                 for candidate in sorted(seed_dir.glob(f"main*.{self.lang_ext}")):
                     if not candidate.exists():
                         continue
                     content = candidate.read_text(encoding="utf-8")
-                    # Compare code content (ignoring outer whitespace).
+                                                                       
                     if content.strip() == best_program.code.strip():
                         source_path = seed_dir
                         matched_main_file = candidate
@@ -2717,7 +2717,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 )
                 return
         else:
-            # Gen 1+: use gen_N directory directly.
+                                                   
             source_path = gen_dir
 
         if not source_path.exists():
@@ -2733,8 +2733,8 @@ class AutoformalizationRunner(EvolutionRunner):
 
         shutil.copytree(source_path, best_dir)
 
-        # If Gen0 best came from a repaired file (e.g. main_repairK.lean),
-        # ensure best/main.lean matches the actual best program code.
+                                                                          
+                                                                     
         if best_program.generation == 0 and matched_main_file is not None:
             best_main = best_dir / f"main.{self.lang_ext}"
             try:
@@ -2778,10 +2778,10 @@ class AutoformalizationRunner(EvolutionRunner):
         end_time = time.time()
         rtime = end_time - job.start_time
 
-        # Get evaluation results.
+                                 
         results = self.scheduler.get_job_results(job.job_id, job.results_dir)
 
-        # Read candidate code.
+                              
         file_exists = Path(job.exec_fname).exists()
         try:
             evaluated_code = Path(job.exec_fname).read_text(encoding="utf-8")
@@ -2789,10 +2789,10 @@ class AutoformalizationRunner(EvolutionRunner):
             logger.warning(f"Could not read code for job {job.job_id}. Error: {e}")
             evaluated_code = ""
 
-        # =====================================================================
-        # Fix: if the candidate file does not exist, record failure and skip repair.
-        # =====================================================================
-        # This can happen when patch generation fails completely (all attempts fail).
+                                                                               
+                                                                                    
+                                                                               
+                                                                                     
         if not file_exists:
             logger.warning(
                 f"[Patch Failed] File does not exist for gen {job.generation}: "
@@ -2810,7 +2810,7 @@ class AutoformalizationRunner(EvolutionRunner):
             )
             return
 
-        # Extract metrics.
+                          
         metrics_val = results.get("metrics", {}) if results else {}
         compile_ok = metrics_val.get("compile_ok", 0)
         compile_error_type = metrics_val.get("compile_error_type", "")
@@ -2818,12 +2818,12 @@ class AutoformalizationRunner(EvolutionRunner):
         statement = metrics_val.get("statement", "")
         original_code = str(metrics_val.get("code") or evaluated_code or "")
 
-        # =====================================================================
-        # Constraint A/B handling for compile_ok=0
-        # =====================================================================
+                                                                               
+                                                  
+                                                                               
         if compile_ok == 0:
-            # Track compile-fail candidates in meta memory (global insights),
-            # without inserting them into the DB/archive (constraint B).
+                                                                             
+                                                                        
             try:
                 pseudo_program = Program(
                     id=str(uuid.uuid4()),
@@ -2855,17 +2855,17 @@ class AutoformalizationRunner(EvolutionRunner):
                 f"error_type: {compile_error_type}"
             )
 
-            # Fix: if statement is empty, try extracting from file content directly.
-            # This handles cases where normalize_lean_statement returns an empty string.
+                                                                                    
+                                                                                        
             if not statement and evaluated_code:
-                # Try extracting statement from raw file content.
+                                                                 
                 statement = normalize_lean_statement(evaluated_code)
                 if statement:
                     logger.info(
                         f"[Repair] Recovered statement from file content for gen {job.generation}"
                     )
 
-            # Fix: if there is no code and no error info, skip repair.
+                                                                      
             if not original_code and not compile_error_msg:
                 logger.warning(
                     f"[Repair] Empty code and no error info for gen {job.generation}. "
@@ -2902,8 +2902,8 @@ class AutoformalizationRunner(EvolutionRunner):
                 ):
                     return
 
-                # Marker file for post-hoc diagnosis: preserve the original LLM candidate
-                # that failed compile, so users can verify fallback was triggered and inspect the failure.
+                                                                                         
+                                                                                                          
                 if write_llm_fail_marker:
                     try:
                         exec_path = Path(job.exec_fname)
@@ -2942,7 +2942,7 @@ class AutoformalizationRunner(EvolutionRunner):
                         evolast_max_rewrites = 32
                     evolast_weights = parse_rule_weights(os.environ.get("AUTOFORMAL_EVOLAST_RULE_WEIGHTS"))
 
-                    # Use a stable seed so reruns are reproducible (given same parent_id + gen).
+                                                                                                
                     seed_material = f"{job.parent_id}|{job.generation}|{attempt}|{reason}"
                     seed = int(hashlib.sha256(seed_material.encode("utf-8")).hexdigest()[:8], 16)
                     fallback_code, fallback_info = apply_evolast_to_lean_code(
@@ -3019,15 +3019,15 @@ class AutoformalizationRunner(EvolutionRunner):
                         )
 
             if self.repair_config.enabled:
-                # Per user spec: even if we will run LLM repair, also try an EvolAST compile-fallback
-                # immediately so we have at least one "feasible (compile_ok=1)" candidate ASAP.
+                                                                                                     
+                                                                                               
                 _maybe_run_evolast_compile_fallback(
                     reason=f"compile_fail_immediate:{compile_error_type or 'unknown'}",
                     attempt=1,
                     write_llm_fail_marker=True,
                 )
 
-                # Create repair item and attempt repair.
+                                                        
                 repair_item = RepairQueueItem(
                     program_id=str(uuid.uuid4()),
                     exec_fname=job.exec_fname,
@@ -3041,7 +3041,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 )
                 repaired_program = self._process_repair(repair_item, job)
 
-                # Optional: a second EvolAST attempt after repair is exhausted (still no LLM repair on EvolAST).
+                                                                                                                
                 if repaired_program is None:
                     _maybe_run_evolast_compile_fallback(
                         reason=f"compile_fail_repair_exhausted:{compile_error_type or 'unknown'}",
@@ -3049,7 +3049,7 @@ class AutoformalizationRunner(EvolutionRunner):
                         write_llm_fail_marker=False,
                     )
             else:
-                # Repair disabled: record failure directly.
+                                                           
                 self._add_to_failure_buffer(
                     program_id=str(uuid.uuid4()),
                     generation=job.generation,
@@ -3060,19 +3060,19 @@ class AutoformalizationRunner(EvolutionRunner):
                     repair_llm_calls_used=0,
                     final_status="no_repair",
                 )
-                # Optional: EvolAST fallback (compile-fail, repair disabled).
+                                                                             
                 _maybe_run_evolast_compile_fallback(
                     reason=f"compile_fail_no_repair:{compile_error_type or 'unknown'}",
                     attempt=1,
                     write_llm_fail_marker=True,
                 )
-            # Key rule: compile_ok=0 is never inserted into archive; return early.
+                                                                                  
             return
 
-        # =====================================================================
-        # compile_ok=1: normal path
-        # =====================================================================
-        # Reuse precomputed embedding + novelty cost.
+                                                                               
+                                   
+                                                                               
+                                                     
         code_embedding = job.code_embedding
         e_cost = job.embed_cost
         n_cost = job.novelty_cost
@@ -3081,7 +3081,7 @@ class AutoformalizationRunner(EvolutionRunner):
         stdout_log = ""
         stderr_log = ""
         if results:
-            # For autoformalization, "correct" is equivalent to compile_ok=1 (compile is the hard validity gate).
+                                                                                                                 
             correct_val = True
             stdout_log = results.get("stdout_log", "")
             stderr_log = results.get("stderr_log", "")
@@ -3091,8 +3091,8 @@ class AutoformalizationRunner(EvolutionRunner):
         private_metrics = metrics_val.get("private", {})
         text_feedback = metrics_val.get("text_feedback", "")
 
-        # Hard filter: `theorem ... : True := ...` is a placeholder and must never enter
-        # archive/parent/inspirations. This is a safety net (normally rejected in run_patch / Gen0).
+                                                                                        
+                                                                                                    
         if self.evo_config.language == "lean":
             stmt_for_guard = str(statement or "").strip()
             if not stmt_for_guard and evaluated_code:
@@ -3113,7 +3113,7 @@ class AutoformalizationRunner(EvolutionRunner):
                     final_status="placeholder_filtered",
                 )
 
-                # Insert as incorrect (not archived) to avoid generation gaps in bookkeeping.
+                                                                                             
                 filtered_program = Program(
                     id=str(uuid.uuid4()),
                     code=evaluated_code,
@@ -3143,7 +3143,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 self.db.save()
                 return
 
-        # Constraint B: only compile_ok=1 is inserted into archive.
+                                                                   
         db_program = Program(
             id=str(uuid.uuid4()),
             code=evaluated_code,
@@ -3179,9 +3179,9 @@ class AutoformalizationRunner(EvolutionRunner):
             f"score={combined_score:.2f}, tuple={metrics_val.get('fitness_tuple')}"
         )
 
-        # File-seed0 pruning: once any Gen>=1 compile_ok=1 program enters the archive, delete
-        # the seed0 introduced by `--init_program` (and its island copies) to avoid sampling
-        # collapsing back to placeholders.
+                                                                                             
+                                                                                            
+                                          
         if not self._file_seed0_pruned and int(getattr(job, "generation", 0) or 0) > 0:
             delete_fn = getattr(self.db, "delete_file_seed0", None)
             deleted_count = int(delete_fn()) if callable(delete_fn) else 0
@@ -3192,7 +3192,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 )
             self._file_seed0_pruned = True
 
-        # Post-processing (meta memory, LLM selection, etc.).
+                                                             
         self._post_process_program(db_program, job)
 
     def _process_repair(self, repair_item: RepairQueueItem, original_job: RunningJob):
@@ -3226,7 +3226,7 @@ class AutoformalizationRunner(EvolutionRunner):
         if repair_item.generation == 0 and self.repair_config.max_repair_attempts_gen0:
             max_attempts = int(self.repair_config.max_repair_attempts_gen0)
 
-        # Optional: budget triage — skip repair for certain error types.
+                                                                        
         try:
             skip_types = {t.lower() for t in (getattr(self, "repair_skip_error_types", set()) or set())}
         except Exception:
@@ -3273,12 +3273,12 @@ class AutoformalizationRunner(EvolutionRunner):
                 if raw_content is not None:
                     (dump_dir / f"{stem}.raw.txt").write_text(raw_content, encoding="utf-8")
             except Exception:
-                # Debug-only: never fail the run because dumping failed.
+                                                                        
                 return
 
         budget_reason_hit: Optional[str] = None
         for attempt in range(max_attempts):
-            # Budget guard: avoid uncontrolled overshoot inside repair loops.
+                                                                             
             budget_reason = self._check_budget_exhausted()
             if budget_reason is not None:
                 budget_reason_hit = budget_reason
@@ -3291,7 +3291,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 f"[Repair] Attempt {attempt + 1}/{max_attempts} for gen {repair_item.generation}"
             )
 
-            # Build repair prompt.
+                                  
             sys_msg, user_msg = build_repair_prompt(
                 original_code=repair_item.original_code,
                 compile_error_type=repair_item.compile_error_type,
@@ -3303,7 +3303,7 @@ class AutoformalizationRunner(EvolutionRunner):
             llm_kwargs = self.llm.get_kwargs()
             llm_kwargs["temperature"] = self.repair_config.repair_temperature
 
-            # Constraint C: call LLM and count toward budget (delta of underlying LLM client's total_calls).
+                                                                                                            
             repair_llm = self._repair_llm_override()
             before_calls = getattr(self.llm, "total_calls", None)
             response = None
@@ -3366,7 +3366,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 self.total_repair_llm_calls += calls_used
                 repair_item.total_repair_llm_calls_used += calls_used
             else:
-                # Fallback: assume one logical call.
+                                                    
                 self.total_repair_llm_calls += 1
                 repair_item.total_repair_llm_calls_used += 1
 
@@ -3386,7 +3386,7 @@ class AutoformalizationRunner(EvolutionRunner):
 
             normalized_source = extracted_source if repaired_code else ""
 
-            # Fallback 1: try model adapter parsing on the full raw output.
+                                                                           
             if not repaired_code:
                 model_name = (
                     str(getattr(response, "model_name", "") or "").strip()
@@ -3402,7 +3402,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 else:
                     repaired_code = ""
 
-            # Fallback 2: normalize directly from raw output (handles "prompt echoed as comment" cases).
+                                                                                                        
             if not repaired_code:
                 repaired_code = normalize_lean_code(raw_content)
                 if normalize_lean_statement(repaired_code):
@@ -3423,10 +3423,10 @@ class AutoformalizationRunner(EvolutionRunner):
             dump_payload["decision"] = "code_extracted"
             _maybe_dump_repair_attempt(payload=dump_payload, raw_content=raw_content)
 
-            # Constraint C: re-evaluate and count toward budget.
+                                                                
             self.total_repair_evals += 1
 
-            # Create repaired program file.
+                                           
             repair_fname = repair_item.exec_fname.replace(
                 f".{self.lang_ext}", f"_repair{attempt + 1}.{self.lang_ext}"
             )
@@ -3434,7 +3434,7 @@ class AutoformalizationRunner(EvolutionRunner):
             with open(repair_fname, "w") as f:
                 f.write(repaired_program)
 
-            # Run evaluation.
+                             
             results, rtime = self.scheduler.run(repair_fname, repair_item.results_dir)
 
             if results:
@@ -3442,12 +3442,12 @@ class AutoformalizationRunner(EvolutionRunner):
                 new_compile_ok = metrics.get("compile_ok", 0)
 
                 if new_compile_ok == 1:
-                    # Repair succeeded!
+                                       
                     logger.info(
                         f"[Repair] SUCCESS! Compile fixed after {attempt + 1} attempts"
                     )
 
-                    # Insert into archive.
+                                          
                     db_program = self._add_repaired_to_archive(
                         repair_item,
                         repaired_program,
@@ -3457,7 +3457,7 @@ class AutoformalizationRunner(EvolutionRunner):
                         original_job,
                     )
 
-                    # Record into failure_buffer (mark success).
+                                                                
                     self._add_to_failure_buffer(
                         program_id=repair_item.program_id,
                         generation=repair_item.generation,
@@ -3470,13 +3470,13 @@ class AutoformalizationRunner(EvolutionRunner):
                     )
                     return db_program
 
-                # Repair failed; update error info and continue to next attempt.
+                                                                                
                 repair_item.compile_error_type = metrics.get("compile_error_type", "")
                 repair_item.compile_error_msg = metrics.get("compile_error_msg", "")
                 repair_item.original_code = str(metrics.get("code") or repaired_code or "")
 
         if budget_reason_hit is not None:
-            # Budget exhausted: stop repair early and record for auditability.
+                                                                              
             self._add_to_failure_buffer(
                 program_id=repair_item.program_id,
                 generation=repair_item.generation,
@@ -3489,7 +3489,7 @@ class AutoformalizationRunner(EvolutionRunner):
             )
             return None
 
-        # Repair attempts exhausted; still failing.
+                                                   
         logger.warning(
             f"[Repair] EXHAUSTED after {max_attempts} attempts for gen {repair_item.generation}"
         )
@@ -3531,7 +3531,7 @@ class AutoformalizationRunner(EvolutionRunner):
         if not use_semantic:
             return None
 
-        # Optional: stage semantic repair to late budget calls.
+                                                               
         start_calls = getattr(self, "semantic_repair_start_calls", None)
         if start_calls is not None:
             try:
@@ -3549,7 +3549,7 @@ class AutoformalizationRunner(EvolutionRunner):
         max_attempts = int(getattr(self.repair_config, "max_repair_attempts", 0) or 0)
         if base_job.generation == 0 and getattr(self.repair_config, "max_repair_attempts_gen0", 0):
             max_attempts = int(getattr(self.repair_config, "max_repair_attempts_gen0") or max_attempts)
-        # Allow semantic-repair-specific overrides (keeps compile-repair budgets intact).
+                                                                                         
         override: Optional[int] = None
         if base_job.generation == 0 and self.semantic_repair_max_attempts_gen0 is not None:
             override = self.semantic_repair_max_attempts_gen0
@@ -3571,7 +3571,7 @@ class AutoformalizationRunner(EvolutionRunner):
         ).strip()
         previous_compile_error = ""
 
-        # If Critic feedback is missing, do not attempt semantic repair (nothing to optimize against).
+                                                                                                      
         if not current_accuracy:
             return None
 
@@ -3596,7 +3596,7 @@ class AutoformalizationRunner(EvolutionRunner):
             )
 
             llm_kwargs = self.llm.get_kwargs()
-            # Semantic repair benefits from small exploration but should remain stable.
+                                                                                       
             llm_kwargs["temperature"] = float(self.semantic_repair_temperature)
 
             repair_llm = self._repair_llm_override()
@@ -3635,7 +3635,7 @@ class AutoformalizationRunner(EvolutionRunner):
 
             raw_content = response.content
 
-            # Extract best Lean code block (prefer the last fenced block containing a declaration).
+                                                                                                   
             repaired_code = extract_best_lean_code_block(raw_content) or ""
             if not repaired_code:
                 model_name = (
@@ -3653,7 +3653,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 logger.warning(f"[SemanticRepair] Empty/invalid Lean code, attempt {attempt + 1}")
                 continue
 
-            # Evaluate the semantic-repaired program.
+                                                     
             self.total_semantic_repair_evals += 1
             repair_fname = base_job.exec_fname.replace(
                 f".{self.lang_ext}", f"_semrepair{attempt + 1}.{self.lang_ext}"
@@ -3661,7 +3661,7 @@ class AutoformalizationRunner(EvolutionRunner):
             repaired_program = self._build_repaired_program(repaired_code)
             Path(repair_fname).write_text(repaired_program, encoding="utf-8")
 
-            # Use a dedicated results directory to avoid overwriting the base candidate's results.
+                                                                                                  
             sem_results_dir = Path(base_job.exec_fname).parent / f"results_semrepair_{attempt + 1:02d}"
             sem_results_dir.mkdir(parents=True, exist_ok=True)
             results, rtime = self.scheduler.run(repair_fname, str(sem_results_dir))
@@ -3679,12 +3679,12 @@ class AutoformalizationRunner(EvolutionRunner):
                 )
                 continue
 
-            # compile_ok == 1: update code/feedback from metrics.
+                                                                 
             current_code = str(metrics.get("code") or repaired_code or "")
             previous_compile_error = ""
 
             if semantic_ok == 1:
-                # Success: add repaired program as a new child in the archive.
+                                                                              
                 code_embedding, e_cost = self.get_code_embedding(repair_fname)
                 stdout_log = results.get("stdout_log", "") if results else ""
                 stderr_log = results.get("stderr_log", "") if results else ""
@@ -3753,7 +3753,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 self._post_process_program(db_program, sem_job)
                 return db_program
 
-            # semantic_ok == 0: update critic feedback for next attempt, if available.
+                                                                                      
             current_accuracy = str(metrics.get("critic_accuracy_confirmation") or current_accuracy or "").strip()
 
         return None
@@ -3807,7 +3807,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 "llm_calls_used": int(repair_item.total_repair_llm_calls_used or 0),
                 "original_error_type": repair_item.compile_error_type,
                 "fitness_tuple": list(metrics.get("fitness_tuple", (1, 0, 0, 0.0))),
-                "repaired": True,  # mark as repaired program
+                "repaired": True,                            
                 "cycle_log_prob": metrics.get("cycle_log_prob", None),
                 "cycle_normalized_log_prob": metrics.get("cycle_normalized_log_prob", None),
                 "cycle_score": metrics.get("cycle_score", None),
@@ -3847,10 +3847,10 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def _post_process_program(self, db_program: Program, job: RunningJob):
         """Post-processing after a program is inserted into the DB/archive."""
-        # Meta memory tracking.
+                               
         self.meta_summarizer.add_evaluated_program(db_program)
-        # Meta update: trigger periodically based on the number of unprocessed
-        # evaluated programs (same semantics as shinka/core/runner.py).
+                                                                              
+                                                                       
         if self.meta_summarizer.should_update_meta(getattr(self.evo_config, "meta_rec_interval", None)):
             logger.info(
                 f"[Meta] Updating meta memory after processing "
@@ -3863,7 +3863,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 if meta_cost and meta_cost > 0:
                     logger.info(f"[Meta] Update cost: ${meta_cost:.4f}")
 
-        # LLM selection update.
+                               
         if self.llm_selection is not None and db_program.metadata:
             if "model_name" in db_program.metadata:
                 parent = (
@@ -3882,14 +3882,14 @@ class AutoformalizationRunner(EvolutionRunner):
         self._update_best_solution()
         self._save_meta_memory()
 
-        # Optional: semantic repair for compile_ok=1 but semantic_ok=0 candidates.
+                                                                                  
         try:
             if self.semantic_repair_enabled and bool(self.problem_config.get("use_semantic", False)):
                 pm = db_program.public_metrics or {}
                 compile_ok = int(pm.get("compile_ok", 0) or 0)
                 semantic_ok = int(pm.get("semantic_ok", 0) or 0)
                 if compile_ok == 1 and semantic_ok == 0:
-                    # We need the original job metadata for file paths; fall back to a minimal stub.
+                                                                                                    
                     base_job = job
                     base_metrics = {}
                     try:
@@ -3906,7 +3906,7 @@ class AutoformalizationRunner(EvolutionRunner):
                         evaluated_code=evaluated_code,
                     )
         except Exception:
-            # Semantic repair is optional; never break the main run.
+                                                                    
             pass
 
     def _maybe_update_meta_by_generation(self):
@@ -3953,9 +3953,9 @@ class AutoformalizationRunner(EvolutionRunner):
             "failure_buffer_stats": self.failure_buffer.get_stats(),
         }
 
-    # =========================================================================
-    # Termination logic
-    # =========================================================================
+                                                                               
+                       
+                                                                               
 
     def _generation_llm_api_calls(self) -> int:
         """Return generation-side raw LLM API calls across all generator clients."""
@@ -3988,7 +3988,7 @@ class AutoformalizationRunner(EvolutionRunner):
         used = base_calls + patch_calls + seedbank_debits
         remaining = max(0, int(cap) - int(used))
 
-        # Cap each client to allow at most `remaining` additional calls from *this point*.
+                                                                                          
         try:
             if hasattr(self.llm, "max_total_calls"):
                 self.llm.max_total_calls = int(base_calls) + int(remaining)
@@ -4014,7 +4014,7 @@ class AutoformalizationRunner(EvolutionRunner):
         """
         tc = self.termination_config
 
-        # Keep the internal retry logic honest: update per-client caps based on *global* remaining budget.
+                                                                                                          
         try:
             self._sync_generation_llm_budget_caps()
         except Exception:
@@ -4023,12 +4023,12 @@ class AutoformalizationRunner(EvolutionRunner):
         raw_llm_api_calls = int(self._generation_llm_api_calls())
         budget_calls = raw_llm_api_calls + int(getattr(self, "seedbank_debited_calls", 0) or 0)
 
-        # Check generation-side LLM call count (raw + seedbank debits).
+                                                                       
         if tc.max_llm_calls is not None:
             if budget_calls >= tc.max_llm_calls:
                 return f"max_llm_calls_reached ({budget_calls} >= {tc.max_llm_calls})"
 
-        # Check evaluator-side effective eval count.
+                                                    
         if tc.max_evals is not None:
             total_effective_evals = (
                 len(self.db.get_all_programs())
@@ -4038,7 +4038,7 @@ class AutoformalizationRunner(EvolutionRunner):
             if total_effective_evals >= tc.max_evals:
                 return f"max_evals_reached ({total_effective_evals} >= {tc.max_evals})"
 
-        # Check wall-clock time.
+                                
         if tc.max_time_seconds is not None:
             elapsed = time.time() - self.start_time
             if elapsed >= tc.max_time_seconds:
@@ -4052,8 +4052,8 @@ class AutoformalizationRunner(EvolutionRunner):
 
         Returns True if stagnated.
         """
-        # `stagnation_generations <= 0` is treated as "disable stagnation early-stop".
-        # This matches typical experiment naming like `__nostag__`.
+                                                                                      
+                                                                   
         if int(self.termination_config.stagnation_generations or 0) <= 0:
             if self.best_fitness_tuple is None or current_best_tuple > self.best_fitness_tuple:
                 self.best_fitness_tuple = current_best_tuple
@@ -4067,14 +4067,14 @@ class AutoformalizationRunner(EvolutionRunner):
             self.generations_without_improvement = 0
             return False
 
-        # Lexicographic compare.
+                                
         if current_best_tuple > self.best_fitness_tuple:
-            # Improvement.
+                          
             self.best_fitness_tuple = current_best_tuple
             self.generations_without_improvement = 0
             return False
         else:
-            # No improvement.
+                             
             self.generations_without_improvement += 1
             if self.generations_without_improvement >= self.termination_config.stagnation_generations:
                 return True
@@ -4104,7 +4104,7 @@ class AutoformalizationRunner(EvolutionRunner):
         logger.info(f"[SoftReset] Performing soft reset #{self.soft_resets_count}")
         logger.info(f"  Temperature boost (config value; not applied yet): +{tc.reset_temperature_boost}")
         logger.info(f"  Crossover boost (config value; not applied yet): +{tc.reset_crossover_boost}")
-        # Apply diversity pressure by boosting parent usage penalty.
+                                                                    
         try:
             old_alpha = float(getattr(self.db_config, "parent_usage_penalty_alpha", 0.0) or 0.0)
         except Exception:
@@ -4113,19 +4113,19 @@ class AutoformalizationRunner(EvolutionRunner):
         setattr(self.db_config, "parent_usage_penalty_alpha", new_alpha)
         logger.info(f"  Parent usage penalty alpha: {old_alpha:.3f} -> {new_alpha:.3f}")
 
-        # Reset stagnation counter.
+                                   
         self.generations_without_improvement = 0
 
     def _save_termination_log(self) -> Dict[str, Any]:
         """Save the termination log."""
-        # Generation-side call accounting:
-        # - raw_llm_api_calls: actual HTTP calls made by the generator (incl. retries)
-        # - seedbank_debited_calls: synthetic debits for seedbank reuse fairness
-        # - total_budget_calls: budget-facing number (raw + debits)
+                                          
+                                                                                      
+                                                                                
+                                                                   
         raw_llm_api_calls = int(getattr(self.llm, "total_calls", 0) or 0)
         seedbank_debited_calls = int(self.seedbank_debited_calls or 0)
         total_budget_calls = raw_llm_api_calls + seedbank_debited_calls
-        # Evaluator-side "effective eval count" (reported separately for evaluation overhead).
+                                                                                              
         total_effective_evals = (
             len(self.db.get_all_programs())
             + int(getattr(self, "total_repair_evals", 0) or 0)
@@ -4138,7 +4138,7 @@ class AutoformalizationRunner(EvolutionRunner):
             "y",
             "on",
         }
-        # Aggregate optional novelty/embedding stats (kept out of main LLM budget).
+                                                                                   
         total_embed_cost = 0.0
         total_novelty_checks = 0
         total_novelty_cost = 0.0
@@ -4151,7 +4151,7 @@ class AutoformalizationRunner(EvolutionRunner):
         except Exception:
             pass
 
-        # Baseline(batchN) sample completeness audit (supports "fill holes" and post-mortem debugging).
+                                                                                                       
         batchn_expected = None
         batchn_completed = None
         batchn_missing_ranges = None
@@ -4211,10 +4211,10 @@ class AutoformalizationRunner(EvolutionRunner):
             "code_embed_sim_threshold": getattr(self.evo_config, "code_embed_sim_threshold", None),
             "openai_embed_base_url": os.environ.get("OPENAI_EMBED_BASE_URL", ""),
             "novelty_llm_base_url": os.environ.get("OPENAI_NOVELTY_LLM_BASE_URL", ""),
-            # Main budget: generation-side raw calls (includes internal retries).
+                                                                                 
             "total_budget_calls": int(total_budget_calls),
             "total_llm_calls": int(total_budget_calls),
-            # Diagnostics: split actual vs debited calls.
+                                                         
             "raw_llm_api_calls": int(raw_llm_api_calls),
             "seedbank_debited_calls": int(seedbank_debited_calls),
             "total_patch_llm_calls": max(
@@ -4232,7 +4232,7 @@ class AutoformalizationRunner(EvolutionRunner):
             "total_embed_cost": total_embed_cost,
             "total_novelty_checks_performed": total_novelty_checks,
             "total_novelty_cost": total_novelty_cost,
-            # Baseline(batchN) audit fields (None for non-baselines)
+                                                                    
             "batchN_expected_samples": batchn_expected,
             "batchN_completed_samples": batchn_completed,
             "batchN_missing_ranges": batchn_missing_ranges,
@@ -4266,7 +4266,7 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def _finalize_run(self) -> None:
         """Finalize run: write summaries, termination log, and stats (shared by baselines & ours)."""
-        # Finalization: meta summary + best program snapshot, etc. (keep parent-class semantics).
+                                                                                                 
         best_program = self.db.get_best_program()
         self.meta_summarizer.perform_final_summary(str(self.results_dir), best_program)
         self._save_meta_memory()
@@ -4278,10 +4278,10 @@ class AutoformalizationRunner(EvolutionRunner):
         logger.info(f"Evolution run ended at {end_time}")
         logger.info("=" * 80)
 
-        # Save termination log.
+                               
         termination_log = self._save_termination_log()
 
-        # Print stats.
+                      
         repair_stats = self.get_repair_stats()
         logger.info("=" * 60)
         logger.info("Repair Statistics (spec v1.1 constraint C):")
@@ -4324,19 +4324,19 @@ class AutoformalizationRunner(EvolutionRunner):
             results_dir = str(sample_dir / "results")
             Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-            # Resume/repair-friendly behavior:
-            # - If this sample has already been evaluated (metrics.json exists), do NOT overwrite it.
-            #   This enables "fill holes" after transient service disconnects without corrupting
-            #   already-finished samples.
+                                              
+                                                                                                     
+                                                                                                
+                                         
             metrics_path = Path(results_dir) / "metrics.json"
             if metrics_path.exists() and metrics_path.stat().st_size > 0:
                 continue
 
-            # --- Generate initial statement (independent) ---
-            # IMPORTANT: transient LLM/Lean/Critic service disconnects must not create "empty samples".
-            # We retry generation for the SAME sample_idx until it succeeds (or a global termination
-            # condition such as max_time_seconds triggers), so we end up with exactly `num_samples`
-            # evaluated sample folders.
+                                                              
+                                                                                                       
+                                                                                                    
+                                                                                                   
+                                       
             before_calls = getattr(self.llm, "total_calls", None)
             api_costs = 0.0
             max_gen_retries = _env_int("AUTOFORMAL_BASELINE_BATCHN_GEN_MAX_RETRIES")
@@ -4368,7 +4368,7 @@ class AutoformalizationRunner(EvolutionRunner):
                         f"(attempt {gen_attempt}{'' if max_gen_retries is None else f'/{max_gen_retries}'}): {e}"
                     )
                     if max_gen_retries is not None and gen_attempt >= int(max_gen_retries):
-                        # Hard-stop: do not silently produce incomplete sample sets.
+                                                                                    
                         self.termination_reason = (
                             f"baseline_generation_failed (sample={sample_idx}, attempts={gen_attempt})"
                         )
@@ -4384,13 +4384,13 @@ class AutoformalizationRunner(EvolutionRunner):
                         )
                         logger.error(f"[Baseline batchN] {self.termination_reason}")
                         break
-                    # Exponential backoff helps during brief service outages.
+                                                                             
                     sleep_s = min(float(retry_backoff_cap_s), float(retry_backoff_s) * (2 ** min(gen_attempt - 1, 6)))
                     time.sleep(max(0.0, sleep_s))
                     continue
 
             if initial_code is None:
-                # Generation did not succeed; exit the baseline loop so the run is clearly marked as incomplete.
+                                                                                                                
                 break
 
             after_calls = getattr(self.llm, "total_calls", None)
@@ -4400,7 +4400,7 @@ class AutoformalizationRunner(EvolutionRunner):
 
             Path(exec_fname).write_text(initial_code, encoding="utf-8")
 
-            # --- Evaluate ---
+                              
             results, rtime = self.scheduler.run(exec_fname, results_dir)
 
             try:
@@ -4450,12 +4450,12 @@ class AutoformalizationRunner(EvolutionRunner):
                     "patch_description": patch_description,
                     "stdout_log": stdout_log,
                     "stderr_log": stderr_log,
-                # fitness_tuple order: (compile_ok, beq_ok, semantic_ok, cycle_score)
+                                                                                     
                 "fitness_tuple": list(metrics_val.get("fitness_tuple", (compile_ok, 0, 0, 0.0))),
                     "cycle_log_prob": metrics_val.get("cycle_log_prob", None),
                     "cycle_normalized_log_prob": metrics_val.get("cycle_normalized_log_prob", None),
                     "cycle_score": metrics_val.get("cycle_score", None),
-                    # --- baseline audit fields ---
+                                                   
                     "baseline_mode": "batchN",
                     "sample_id": int(sample_idx),
                     "step_idx": 0,
@@ -4470,8 +4470,8 @@ class AutoformalizationRunner(EvolutionRunner):
             self.db.save()
 
             if compile_ok == 1:
-                # Optional semantic repair (opt-in): only when semantic judge is enabled and the
-                # current candidate is compile_ok=1 but semantic_ok=0.
+                                                                                                
+                                                                      
                 if self.semantic_repair_enabled:
                     try:
                         sem_ok = int(public_metrics.get("semantic_ok", 0) or 0)
@@ -4505,7 +4505,7 @@ class AutoformalizationRunner(EvolutionRunner):
                         )
                 continue
 
-            # --- Compile repair (optional) ---
+                                               
             if not self.repair_config.enabled:
                 self._add_to_failure_buffer(
                     program_id=pre_program_id,
@@ -4551,7 +4551,7 @@ class AutoformalizationRunner(EvolutionRunner):
             )
             repaired_program = self._process_repair(repair_item, dummy_job)
 
-            # Optional semantic repair after successful compile-repair.
+                                                                       
             if repaired_program is not None and self.semantic_repair_enabled:
                 try:
                     pm = repaired_program.public_metrics or {}
@@ -4579,7 +4579,7 @@ class AutoformalizationRunner(EvolutionRunner):
         max_attempts = max(max_attempts, 0)
         logger.info(f"[Baseline repairloop1] trajectory={trajectory_id}, max_attempts={max_attempts}")
 
-        # Step 0: generate (or use file if present)
+                                                   
         step_idx = 0
         step_dir = base_dir / f"step_{step_idx}"
         step_dir.mkdir(parents=True, exist_ok=True)
@@ -4674,12 +4674,12 @@ class AutoformalizationRunner(EvolutionRunner):
                     "patch_description": patch_description,
                     "stdout_log": stdout_log,
                     "stderr_log": stderr_log,
-                # fitness_tuple order: (compile_ok, beq_ok, semantic_ok, cycle_score)
+                                                                                     
                 "fitness_tuple": list(metrics_val.get("fitness_tuple", (compile_ok, 0, 0, 0.0))),
                     "cycle_log_prob": metrics_val.get("cycle_log_prob", None),
                     "cycle_normalized_log_prob": metrics_val.get("cycle_normalized_log_prob", None),
                     "cycle_score": metrics_val.get("cycle_score", None),
-                    # --- baseline audit fields ---
+                                                   
                     "baseline_mode": "repairloop1",
                     "trajectory_id": trajectory_id,
                     "step_idx": 0,
@@ -4708,7 +4708,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 )
             return
 
-        # Repair attempts (record every step into DB)
+                                                     
         current_code = str(metrics_val.get("code") or normalize_lean_code(evaluated_code) or evaluated_code or "")
         current_error_type = compile_error_type
         current_error_msg = compile_error_msg
@@ -4763,7 +4763,7 @@ class AutoformalizationRunner(EvolutionRunner):
             if isinstance(before_calls, int) and isinstance(after_calls, int):
                 calls_used = max(after_calls - before_calls, 0)
 
-            # Track global repair budget (constraint C)
+                                                       
             self.total_repair_llm_calls += (calls_used if calls_used is not None and calls_used > 0 else 1)
             resp_cost = float(getattr(response, "cost", 0.0) or 0.0)
             self.total_repair_cost += resp_cost
@@ -4799,7 +4799,7 @@ class AutoformalizationRunner(EvolutionRunner):
             repaired_program = self._build_repaired_program(repaired_code_norm)
             Path(exec_fname).write_text(repaired_program, encoding="utf-8")
 
-            # Evaluate repaired program (counts toward eval budget)
+                                                                   
             self.total_repair_evals += 1
             results, rtime = self.scheduler.run(exec_fname, results_dir)
 
@@ -4843,12 +4843,12 @@ class AutoformalizationRunner(EvolutionRunner):
                         "repair_cost": resp_cost,
                         "stdout_log": stdout_log,
                         "stderr_log": stderr_log,
-                        # fitness_tuple order: (compile_ok, beq_ok, semantic_ok, cycle_score)
+                                                                                             
                         "fitness_tuple": list(metrics_val.get("fitness_tuple", (compile_ok, 0, 0, 0.0))),
                         "cycle_log_prob": metrics_val.get("cycle_log_prob", None),
                         "cycle_normalized_log_prob": metrics_val.get("cycle_normalized_log_prob", None),
                         "cycle_score": metrics_val.get("cycle_score", None),
-                        # --- baseline audit fields ---
+                                                       
                         "baseline_mode": "repairloop1",
                         "trajectory_id": trajectory_id,
                         "step_idx": step_idx,
@@ -4878,7 +4878,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 )
                 return
 
-        # Exhausted
+                   
         self._add_to_failure_buffer(
             program_id=program_id,
             generation=0,
@@ -4918,7 +4918,7 @@ class AutoformalizationRunner(EvolutionRunner):
             f"target: {target_gens} generations (with budget/stagnation checks)"
         )
 
-        # Run generation 0 first to bootstrap the database.
+                                                           
         if self.completed_generations == 0 and target_gens > 0:
             logger.info("Running generation 0 sequentially to initialize database...")
             self._run_generation_0()
@@ -4934,22 +4934,22 @@ class AutoformalizationRunner(EvolutionRunner):
             self.next_generation_to_submit = 1
             logger.info(f"Completed generation 0, total: 1/{target_gens}")
 
-        # Main loop (with budget/stagnation checks).
+                                                    
         if self.completed_generations < target_gens:
             logger.info("Starting parallel execution for remaining generations...")
 
             while (
                 self.completed_generations < target_gens or len(self.running_jobs) > 0
             ):
-                # 1) Check completed jobs.
+                                          
                 completed_jobs = self._check_completed_jobs()
 
-                # 2) Process completed jobs.
+                                            
                 if completed_jobs:
                     for job in completed_jobs:
                         self._process_completed_job(job)
 
-                    # Update completed generation count.
+                                                        
                     self._update_completed_generations()
 
                     if self.verbose:
@@ -4959,7 +4959,7 @@ class AutoformalizationRunner(EvolutionRunner):
                             f"{self.completed_generations}/{target_gens}"
                         )
 
-                    # 2.1 Stagnation detection (based on current best_fitness_tuple).
+                                                                                     
                     current_best_tuple = self._get_current_best_tuple()
                     if current_best_tuple is not None:
                         if self._check_exploration_stagnation(current_best_tuple):
@@ -4976,19 +4976,19 @@ class AutoformalizationRunner(EvolutionRunner):
                                 )
                                 break
 
-                # 3) Budget check (hard stop).
+                                              
                 budget_reason = self._check_budget_exhausted()
                 if budget_reason is not None:
                     self.termination_reason = budget_reason
                     logger.info(f"[Termination] Budget exhausted: {budget_reason}")
                     break
 
-                # 4) Check whether all generations completed.
+                                                             
                 if self.completed_generations >= target_gens:
                     logger.info("All generations completed, exiting...")
                     break
 
-                # 5) Submit new jobs if there's capacity.
+                                                         
                 if (
                     len(self.running_jobs) < max_jobs
                     and self.next_generation_to_submit < target_gens

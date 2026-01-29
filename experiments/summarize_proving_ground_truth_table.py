@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -55,7 +55,7 @@ def _formal_statement_chunks(formal_statement: str) -> List[str]:
     for chunk in tmpl.split("\n\n"):
         if not chunk.strip():
             continue
-        # Match CombiBench's splitting behavior around theorem boundaries.
+                                                                          
         chunk = chunk.replace("\nnoncomputable theorem", "\n\nnoncomputable theorem")
         chunk = chunk.replace("\ntheorem", "\n\ntheorem")
         chunk = chunk.replace("\nlemma", "\n\nlemma")
@@ -242,7 +242,7 @@ def _summarize_attempts(attempts: List[Attempt], *, expected_problems: Iterable[
 
 
 def _preset_runs() -> List[Tuple[str, Path]]:
-    # Relative to examples/autoformalization_v1/experiments/
+                                                            
     return [
         (
             "proofnet50_ground_truth",
@@ -408,9 +408,9 @@ def main() -> int:
         }
         csv_rows.append(row)
 
-        # NOTE: This matches the user's bookkeeping:
-        # - complete@16 := compilation_result.complete (no statement-alignment requirement)
-        # - strict_complete@16 := no-sorry theorem (same as solved_theorem_complete)
+                                                    
+                                                                                           
+                                                                                    
         strict_stmt_complete = base["summary"]["strict_stmt_theorem_complete@16"]
         strict_anscheck_complete = (
             ans["summary"]["strict_stmt_theorem_complete@16"]

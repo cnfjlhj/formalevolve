@@ -60,9 +60,9 @@ def get_cross_component(
 ) -> str:
     all_inspirations = archive_inspirations + top_k_inspirations
 
-    # TODO(RobertTLange): Compute embedding distance between all inspirations and parent - max?! for more diversity
+                                                                                                                   
 
-    # Sample a random inspiration
+                                 
     inspiration = random.choice(all_inspirations)
 
     crossover_inspiration = "# Crossover Inspiration Programs\n"

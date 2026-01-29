@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -26,13 +26,13 @@ _DEFAULT_INFRA_ERROR_PATTERNS: List[str] = [
     r"^ConnectTimeout\b",
     r"^RemoteProtocolError\b",
     r"^HTTPStatusError: Server error '50[0234]\b",
-    # vLLM can return 400 when max_tokens + prompt_tokens > model_max_len.
-    # Treat context-length violations as retryable: they can often succeed after
-    # reducing the completion token budget.
+                                                                          
+                                                                                
+                                           
     r"maximum context length",
-    # Historical runs stored 400 errors without the response body, so they won't
-    # contain "maximum context length". Keep a narrow pattern to allow resuming
-    # and re-running these slots.
+                                                                                
+                                                                               
+                                 
     r"^HTTPStatusError: Client error '400\b",
     r"^JSONDecodeError\b",
 ]
@@ -95,9 +95,9 @@ async def _openai_chat(
             timeout=float(timeout_s),
         )
 
-        # Important: capture server-provided details on non-2xx responses.
-        # vLLM/OpenAI-compatible backends often include actionable information
-        # (e.g., context-length errors) only in the response JSON body.
+                                                                          
+                                                                              
+                                                                       
         if int(resp.status_code) >= 400:
             msg = ""
             body = ""
@@ -147,8 +147,8 @@ def _force_by_sorry(stmt: str) -> str:
     s = str(stmt or "").strip()
     if not s:
         return ""
-    # Canonicalize the statement body so prompt construction and later proof-merging
-    # are robust to formatting differences (`:= sorry`, `:=\nby`, etc.).
+                                                                                    
+                                                                        
     if ":=" not in s:
         return s
     head = s.split(":=", 1)[0].rstrip()
@@ -244,7 +244,7 @@ def _compute_safe_max_tokens_from_error(err: str, *, requested_max_tokens: int) 
             return None
         return safe
 
-    # Fallback if we can't parse details from the server error message.
+                                                                       
     safe = int(requested_max_tokens) - 512
     safe = max(256, safe)
     if safe >= int(requested_max_tokens):
@@ -297,7 +297,7 @@ def _compute_resume_targets(
         out = str(rec.get("model_output") or "").strip()
         if out:
             return True
-        # Backward compatibility: some older records may not store `model_output`.
+                                                                                  
         full_code = str(rec.get("full_code") or "").strip()
         return bool(full_code and full_code != "None")
 
@@ -341,7 +341,7 @@ def _build_prompt(
     lean4_code: str,
 ) -> List[Dict[str, str]]:
     if handler == "dpskcot":
-        # Align with Goedel-Prover-V2/src/utils.py:DeepSeekCoTHandler.prover_inference
+                                                                                      
         formal_statement = lean4_code.split(":= by")[0] + ":= by sorry"
         prompt = (
             "Complete the following Lean 4 code:\n\n"
@@ -353,9 +353,9 @@ def _build_prompt(
         )
         return [{"role": "user", "content": prompt}]
     if handler == "kiminacot":
-        # Align with Goedel-Prover-V2/src/utils.py:KiminaCoTHandler.prover_inference
+                                                                                    
         formal_statement = lean4_code.split(":= by")[0] + ":= by"
-        # Match Goedel's clean_code_string behavior.
+                                                    
         lines = str(formal_statement or "").splitlines()
         cleaned = "\n".join(
             [
@@ -379,7 +379,7 @@ def _build_prompt(
             {"role": "user", "content": user},
         ]
     if handler == "dpsknoncot":
-        # Align with Goedel-Prover-V2/src/utils.py:DeepSeekNonCoTHandler.prover_inference
+                                                                                         
         formal_statement = lean4_code.split(":= by")[0] + ":= by sorry"
         prompt = (
             "Complete the following Lean 4 code.\n"
@@ -394,19 +394,19 @@ def _build_prompt(
 
 
 def _extract_code_from_fence(text: str) -> str:
-    # Match Goedel's utils.py:InferenceHandler.extrac_code, plus a small fallback.
+                                                                                  
     if not text:
         return ""
     for pat in (r"```lean4\n(.*?)\n```", r"```lean4\n(.*?)```", r"```lean\n(.*?)```"):
         matches = re.findall(pat, text, re.DOTALL)
         if matches:
             return str(matches[-1]).strip()
-    # Handle truncated outputs that start a code fence but never close it.
+                                                                          
     for fence in ("```lean4\n", "```lean\n"):
         idx = text.find(fence)
         if idx >= 0:
             return text[idx + len(fence) :].strip()
-    # Fallback: start from first declaration line (useful when model skips fences).
+                                                                                   
     m = re.search(
         r"(?m)^\s*(?:import|set_option|open|abbrev|opaque|axiom|instance|"
         r"(?:noncomputable\s+)?(?:theorem|lemma|def|example))\b",
@@ -428,8 +428,8 @@ def _replace_statement_in_proof(statement: str, proof: str) -> str:
     if not st.strip() or not pr.strip():
         return ""
 
-    # Find the statement's `:= by` (with flexible whitespace/newlines) and keep
-    # everything before it (inclusive).
+                                                                               
+                                       
     marker_re = re.compile(r":=\s*by\b", flags=re.IGNORECASE)
     m0 = marker_re.search(st)
     if not m0:
@@ -437,20 +437,20 @@ def _replace_statement_in_proof(statement: str, proof: str) -> str:
     head = st[: m0.end()].rstrip()
 
     body = pr.strip()
-    # If the model returned a full theorem, extract the proof body after its `:= by`.
+                                                                                     
     m1 = marker_re.search(body)
     if m1:
         body = body[m1.end() :]
     else:
-        # If it returned `by ...`, drop the leading `by`.
+                                                         
         m_by = re.match(r"^\s*by\b", body)
         if m_by:
             body = body[m_by.end() :]
 
     body_lines = body.splitlines()
-    # Normalize indentation: remove the common leading indentation of the first
-    # non-empty line from all lines. This preserves relative indentation and
-    # avoids accidentally shifting `exact` into a nested `by` block.
+                                                                               
+                                                                            
+                                                                    
     prefix: Optional[str] = None
     for ln in body_lines:
         if not ln.strip():
@@ -487,12 +487,12 @@ def _load_resume_records(
         if not all(i in by_g for i in range(int(exp_n))):
             continue
 
-        # Decide whether to treat this origin as completed. If resuming with infra retries enabled,
-        # we treat infra failures (timeouts/5xx/etc.) as "not completed" so they can be re-run and
-        # filled in without increasing the effective attempt budget.
+                                                                                                   
+                                                                                                  
+                                                                    
         if bool(resume_retry_infra):
             pats = infra_error_patterns or []
-            # Only retry if we haven't exceeded the per-slot infra retry cap.
+                                                                             
             max_prev_retry = max((_record_infra_retry_count(by_g[i]) for i in range(int(exp_n))), default=0)
             if int(max_infra_retries) > 0 and int(max_prev_retry) >= int(max_infra_retries):
                 completed[origin] = [by_g[i] for i in range(int(exp_n))]
@@ -531,7 +531,7 @@ def _load_items(items: Iterable[Dict[str, Any]], *, default_n: int) -> List[Item
         except Exception:
             n_i = int(default_n)
         if n_i <= 0:
-            # Skip items that explicitly request 0 attempts.
+                                                            
             continue
         out.append(Item(origin_problem_id=origin_id, lean4_code=lean4_code, n=int(n_i), input_item=dict(obj)))
     return out
@@ -591,12 +591,12 @@ async def _run_all(
                 if not targets:
                     return it.origin_problem_id, records_by_origin.get(it.origin_problem_id, {})
 
-                # Overload mitigation:
-                # When resuming with infra-retry, an origin can have many missing slots, which would
-                # translate to a large OpenAI `n` in a single request. Large `n` increases active
-                # sequences on the backend (KV cache pressure) and can cause queueing/timeouts.
-                # We chunk targets into smaller requests, without changing the intended per-origin
-                # total number of filled slots.
+                                      
+                                                                                                    
+                                                                                                 
+                                                                                               
+                                                                                                  
+                                               
                 chunk_n = int(max_request_n)
                 if chunk_n <= 0:
                     chunk_n = len(targets)
@@ -609,9 +609,9 @@ async def _run_all(
                     raws: List[str] = []
                     err = ""
                     t0 = time.time()
-                    # Safety: when the backend max context length is 8192, requesting `max_tokens=8192`
-                    # is guaranteed to overflow once prompt tokens > 0. Clamp to a safer cap to avoid
-                    # hard 400 errors and wasted retries.
+                                                                                                       
+                                                                                                     
+                                                         
                     effective_max_tokens = min(int(max_tokens), 8000)
                     nonlocal clamp_warned
                     if not clamp_warned and int(effective_max_tokens) != int(max_tokens):
@@ -623,9 +623,9 @@ async def _run_all(
 
                     for attempt in range(int(max_retries) + 1):
                         try:
-                            # Context-length guard:
-                            # If the backend rejects the request due to prompt+completion exceeding
-                            # the model's max context length, reduce `max_tokens` and retry locally.
+                                                   
+                                                                                                   
+                                                                                                    
                             ctx_reductions = 0
                             while True:
                                 try:
@@ -772,7 +772,7 @@ def main() -> int:
     )
     ap.add_argument("--n", type=int, default=1, help="Number of attempts per input item (default: 1).")
     ap.add_argument("--temperature", type=float, default=1.0)
-    # Default slightly below the common 8192 ctx cap to avoid hard failures from prompt+completion overflow.
+                                                                                                            
     ap.add_argument("--max_tokens", type=int, default=8000)
     ap.add_argument("--timeout_s", type=float, default=600.0)
     ap.add_argument("--api_key", default=os.environ.get("OPENAI_API_KEY", "").strip())

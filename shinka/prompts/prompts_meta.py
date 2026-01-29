@@ -1,4 +1,4 @@
-# Step 1: Individual Program Summaries
+                                      
 META_STEP1_SYSTEM_MSG = (
     "You are an expert programming assistant analyzing an individual program. "
     "Create a standalone summary focusing on implementation details and "
@@ -26,7 +26,7 @@ META_STEP1_USER_MSG = (
     "Follow the format exactly."
 )
 
-# Step 2: Global Insights Scratchpad
+                                    
 META_STEP2_SYSTEM_MSG = (
     "You are an expert programming assistant analyzing specific program "
     "evaluation results to extract actionable optimization insights. Focus "
@@ -90,7 +90,7 @@ META_STEP2_USER_MSG = (
     "ANALYSIS."
 )
 
-# Step 3: Recommendations Generation
+                                    
 META_STEP3_SYSTEM_MSG = (
     "You are an expert programming assistant generating actionable "
     "recommendations for future program mutations based on successful "

@@ -22,7 +22,7 @@ def summarize_diff(diff_file_path: str) -> dict:
                     elif line.is_removed:
                         removed_lines.append(line)
 
-                # Infer modifications (line replacements) from paired adds/removes
+                                                                                  
                 num_modifications = min(len(added_lines), len(removed_lines))
                 file_summary["modified"] += num_modifications
                 file_summary["added"] += len(added_lines) - num_modifications
@@ -33,10 +33,10 @@ def summarize_diff(diff_file_path: str) -> dict:
     except UnidiffParseError as e:
         logger.info(f"Error parsing diff file {diff_file_path}:")
         logger.info(e)
-        # Return an empty summary or handle as per specific requirements
+                                                                        
     except Exception as e:
         logger.info(f"An unexpected error occurred while processing {diff_file_path}:")
         logger.info(e)
-        # Return an empty summary or handle as per specific requirements
+                                                                        
 
     return summary

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Demo: Test the pipeline with dummy models
 
@@ -20,32 +20,32 @@ def main():
     print("Cycle Consistency Autoformalization - Dummy Demo")
     print("=" * 60)
 
-    # Create dummy models for testing
+                                     
     formalizer = DummyLLM()
     informalizer = DummyLLM()
 
-    # Create config
+                   
     config = Config()
     config.verbose = True
     config.model.num_candidates = 3
 
-    # Initialize
+                
     cc = CycleConsistencyAutoformalization(
         formalizer=formalizer,
         informalizer=informalizer,
         config=config,
     )
 
-    # Test informal statement
+                             
     informal = "For all positive integers n, n squared is greater than or equal to n."
 
     print(f"\nInformal statement: {informal}")
     print("-" * 60)
 
-    # Run autoformalization
+                           
     result = cc.autoformalize(informal)
 
-    # Print results
+                   
     print(f"\n{'=' * 60}")
     print("RESULTS")
     print("=" * 60)

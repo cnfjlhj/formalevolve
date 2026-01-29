@@ -34,7 +34,7 @@ shinka_ascii = """  @@@@@@@@@@@@@@@@@@@@@      ░██████╗██╗
 
 def rgb_to_ansi(r, g, b):
     """Convert RGB values to ANSI 256-color code."""
-    # Use the 216-color cube (16-231) for better color precision
+                                                                
     r = int(r * 5 / 255)
     g = int(g * 5 / 255)
     b = int(b * 5 / 255)
@@ -61,7 +61,7 @@ def print_gradient_logo(start_color=(255, 100, 50), end_color=(100, 200, 255)):
         start_color: RGB tuple for the starting color (default: orange-red)
         end_color: RGB tuple for the ending color (default: light blue)
     """
-    # Check if terminal supports colors
+                                       
     if os.getenv("NO_COLOR") or not (
         hasattr(os.sys.stdout, "isatty") and os.sys.stdout.isatty()
     ):
@@ -71,26 +71,26 @@ def print_gradient_logo(start_color=(255, 100, 50), end_color=(100, 200, 255)):
     lines = shinka_ascii.split("\n")
     num_lines = len(lines)
 
-    # Create gradient colors for each line
+                                          
     gradient_colors = create_gradient_colors(start_color, end_color, num_lines)
 
-    # Print each line with its corresponding gradient color
+                                                           
     for i, line in enumerate(lines):
         r, g, b = gradient_colors[i]
         ansi_color = rgb_to_ansi(r, g, b)
         print(f"\033[38;5;{ansi_color}m{line}\033[0m")
 
 
-# Alternative gradient presets
+                              
 GRADIENT_PRESETS = {
-    "fire": ((255, 0, 0), (255, 255, 0)),  # Red to yellow
-    "ocean": ((0, 100, 200), (0, 255, 255)),  # Deep blue to cyan
-    "sunset": ((255, 100, 50), (255, 200, 100)),  # Orange to light orange
-    "forest": ((0, 100, 0), (150, 255, 150)),  # Dark green to light green
-    "purple": ((100, 0, 200), (200, 100, 255)),  # Purple to light purple
-    "rainbow": ((255, 0, 0), (0, 0, 255)),  # Red to blue (simplified rainbow)
-    "monochrome": ((100, 100, 100), (255, 255, 255)),  # Gray to white
-    "red_white": ((255, 0, 0), (255, 255, 255)),  # Red to white
+    "fire": ((255, 0, 0), (255, 255, 0)),                 
+    "ocean": ((0, 100, 200), (0, 255, 255)),                     
+    "sunset": ((255, 100, 50), (255, 200, 100)),                          
+    "forest": ((0, 100, 0), (150, 255, 150)),                             
+    "purple": ((100, 0, 200), (200, 100, 255)),                          
+    "rainbow": ((255, 0, 0), (0, 0, 255)),                                    
+    "monochrome": ((100, 100, 100), (255, 255, 255)),                 
+    "red_white": ((255, 0, 0), (255, 255, 255)),                
 }
 
 
@@ -110,7 +110,7 @@ def print_preset_gradient_logo(preset="sunset"):
             f"Unknown preset '{preset}'. Available presets: "
             f"{list(GRADIENT_PRESETS.keys())}"
         )
-        print_gradient_logo()  # Use default gradient
+        print_gradient_logo()                        
 
 
-# https://fsymbols.com/text-art/
+                                

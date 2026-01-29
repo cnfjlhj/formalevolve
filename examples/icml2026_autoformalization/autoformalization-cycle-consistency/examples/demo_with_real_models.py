@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Demo: Cycle Consistency with Real Models
 
@@ -21,30 +21,30 @@ from src import (
     Config,
 )
 
-# Set up logging
+                
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-# ============================================================
-# MODEL CONFIGURATION - Modify this section for your setup
-# ============================================================
+                                                              
+                                                          
+                                                              
 
-# Option 1: Using vLLM or other OpenAI-compatible server
+                                                        
 USE_API = True
-FORMALIZER_BASE_URL = "http://localhost:8000/v1"  # Your vLLM/Ollama endpoint
+FORMALIZER_BASE_URL = "http://localhost:8000/v1"                             
 FORMALIZER_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
 
-INFORMALIZER_BASE_URL = "http://localhost:8001/v1"  # Can be same or different
+INFORMALIZER_BASE_URL = "http://localhost:8001/v1"                            
 INFORMALIZER_MODEL = "meta-llama/Llama-3.2-3B-Instruct"
 
-# Option 2: Using HuggingFace Transformers directly (requires GPU)
-# USE_API = False
-# FORMALIZER_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-7B"  # Smaller for testing
-# INFORMALIZER_MODEL = "meta-llama/Llama-3.2-3B-Instruct"
+                                                                  
+                 
+                                                                                      
+                                                         
 
-# ============================================================
+                                                              
 
 
 def create_models():
@@ -84,7 +84,7 @@ def main():
     print("Cycle Consistency Autoformalization - Real Models Demo")
     print("=" * 70)
 
-    # Create models
+                   
     try:
         formalizer, informalizer = create_models()
     except Exception as e:
@@ -95,20 +95,20 @@ def main():
         print("  3. You have necessary dependencies installed")
         return
 
-    # Create config
+                   
     config = Config()
     config.verbose = True
     config.model.num_candidates = 5
     config.model.temperature = 0.7
 
-    # Initialize cycle consistency
+                                  
     cc = CycleConsistencyAutoformalization(
         formalizer=formalizer,
         informalizer=informalizer,
         config=config,
     )
 
-    # Test cases from miniF2F-style problems
+                                            
     test_cases = [
         "For all positive integers n, n squared is greater than or equal to n.",
         "There exist integers x, y, z greater than 0 such that x squared plus y squared equals z squared.",
@@ -133,7 +133,7 @@ def main():
 
             if len(result.all_candidates) > 1:
                 print(f"\n  Other candidates:")
-                for cand in result.all_candidates[1:3]:  # Show top 3
+                for cand in result.all_candidates[1:3]:              
                     print(f"    [{cand.rank}] score={cand.normalized_score:.2f}")
 
         except Exception as e:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -37,7 +37,7 @@ def _extract_code_fence(text: str, lang: str = "lean") -> str:
         if "```" in tail:
             body, _ = tail.split("```", 1)
             return body.strip()
-    # Fallback: any code fence.
+                               
     if "```" in text:
         parts = text.split("```")
         if len(parts) >= 3:
@@ -58,7 +58,7 @@ def _theorem_block(code: str) -> str:
 def _theorem_has_sorry(code: str) -> bool:
     blk = _theorem_block(code)
     if not blk:
-        return True  # treat missing theorem as failure
+        return True                                    
     return "sorry" in blk
 
 
@@ -210,7 +210,7 @@ def main() -> int:
     if not isinstance(problems, list) or not problems:
         raise SystemExit(f"Invalid manifest problems: {run_root / 'manifest.json'}")
 
-    # Baseline resolution.
+                          
     baselines = manifest.get("baselines")
     if isinstance(baselines, list) and baselines:
         baselines = [str(b) for b in baselines]
@@ -230,10 +230,10 @@ def main() -> int:
     if not prover_url or not prover_model:
         raise SystemExit("Need --prover_url/--prover_model (or PROVER_URL/PROVER_MODEL env)")
 
-    # Import compile checker lazily (heavy).
+                                            
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     try:
-        from evaluate import check_lean_compile, normalize_lean_code  # type: ignore
+        from evaluate import check_lean_compile, normalize_lean_code                
     except Exception as e:
         raise SystemExit(f"Failed to import evaluate.py helpers: {type(e).__name__}: {e}")
 

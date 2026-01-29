@@ -167,25 +167,9 @@ pip install transformers torch
 pip install vllm
 ```
 
-## Citation
-
-```bibtex
-@inproceedings{barbadacosta2025improving,
-  title={Improving autoformalization via cycle consistency and incremental
-         type-checking using language-model probabilistic programs},
-  author={Barba da Costa, Mauricio and Zaiser, Fabian and Collins, Katherine M.
-          and Patel, Romir and O'Donnell, Timothy J. and Lew, Alexander K.
-          and Tenenbaum, Joshua B. and Mansinghka, Vikash K. and Freer, Cameron E.},
-  booktitle={The 5th Workshop on Mathematical Reasoning and AI (MATH-AI)},
-  year={2025}
-}
-```
-
 ## Extensions
 
 This implementation covers cycle consistency only. The paper also includes:
 
 - **Incremental Type-Checking**: requires integration with Lean 4
-- **SMC sampling**: requires the GenLM framework
-
-For a full reproduction, see the [GenLM](https://github.com/genlm/genlm-control) library.
+-- **SMC sampling**: requires a separate probabilistic-programming framework

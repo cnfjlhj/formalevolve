@@ -113,7 +113,7 @@ if __name__ == "__main__":
     assert num_applied == 1
     assert output_path is None
     assert error is None
-    # Now we can directly check the updated content
+                                                   
     assert updated_content.strip() == expected_result.strip()
 
 
@@ -158,7 +158,7 @@ def new_func2():
 
     assert num_applied == 1
     assert error is None
-    # Should have replaced both evolve blocks with new content
+                                                              
 
 
 def test_apply_full_patch_full_file_without_markers_extracts_block_only():
@@ -166,7 +166,7 @@ def test_apply_full_patch_full_file_without_markers_extracts_block_only():
     into the evolve block; only the block payload is replaced."""
     original_content = """# Header line\n# EVOLVE-BLOCK-START\nold_line()\n# EVOLVE-BLOCK-END\n# Footer line\n"""
 
-    # Patch is the entire file content but with the EVOLVE markers omitted.
+                                                                           
     patch_content = """```python
 new_line()
 another_new_line()
@@ -288,7 +288,7 @@ def new_function():
     assert num_applied == 0
     assert error == "No EVOLVE-BLOCK regions found in original content"
     assert output_path is None
-    assert updated_content == original_content  # Should return original content
+    assert updated_content == original_content                                  
 
 
 def test_apply_full_patch_multiple_evolve_blocks_ambiguous():
@@ -322,7 +322,7 @@ def new_function():
     assert "Multiple EVOLVE-BLOCK regions found" in error
     assert "doesn't specify which to replace" in error
     assert output_path is None
-    assert updated_content == original_content  # Should return original content
+    assert updated_content == original_content                                  
 
 
 def test_apply_full_patch_patch_with_single_marker_ambiguous_multiple_regions():
@@ -338,7 +338,7 @@ func2()
 # Footer
 """
 
-    # Patch includes only START marker
+                                      
     patch_content = """```python
 # Header
 # EVOLVE-BLOCK-START
@@ -368,7 +368,7 @@ def old_func():
 # EVOLVE-BLOCK-END
 """
 
-    # No proper language fences - extract_between will return "none"
+                                                                    
     patch_content = "def new_function(): return 'no fences'"
 
     result = apply_full_patch(
@@ -379,12 +379,12 @@ def old_func():
     )
     updated_content, num_applied, output_path, error, patch_txt, diff_path = result
 
-    # extract_between returns "none" when it can't find the pattern
-    # After our fix, this should be treated as an error
+                                                                   
+                                                       
     assert num_applied == 0
     assert error == "Could not extract code from patch string"
     assert output_path is None
-    assert updated_content == original_content  # Should return original content
+    assert updated_content == original_content                                  
 
 
 def test_apply_full_patch_with_patch_dir():
@@ -422,20 +422,20 @@ def new_function():
         assert diff_path is not None
         assert diff_path.exists()
 
-        # Check that files were created
+                                       
         assert (patch_dir / "rewrite.txt").exists()
         assert (patch_dir / "original.py").exists()
         assert (patch_dir / "main.py").exists()
         assert (patch_dir / "edit.diff").exists()
 
-        # Verify the updated content matches what's in the file
+                                                               
         file_content = output_path.read_text("utf-8")
         assert file_content == updated_content
 
 
-# ============================================================================
-# Tests for Indentation Correction Functionality
-# ============================================================================
+                                                                              
+                                                
+                                                                              
 
 
 def test_find_indented_match_exact_match():
@@ -459,7 +459,7 @@ def test_find_indented_match_needs_indentation():
     y = 2
     return x + y"""
 
-    # Search text without proper indentation
+                                            
     search = "x = 1\ny = 2"
     matched, pos = _find_indented_match(search, original)
 
@@ -478,7 +478,7 @@ def test_find_indented_match_multiline_with_relative_indentation():
             y = 2
     return x + y"""
 
-    # Search text without proper base indentation but with relative indentation
+                                                                               
     search = """if True:
     x = 1
     if nested:
@@ -525,7 +525,7 @@ if x > 5:
 else:
     print("small")"""
 
-    indent_str = "    "  # 4 spaces
+    indent_str = "    "            
     result = _apply_indentation_to_replace(replace_text, indent_str)
 
     expected = """    x = 10
@@ -555,7 +555,7 @@ y = 2"""
 
 def test_strip_trailing_whitespace():
     """Test _strip_trailing_whitespace function."""
-    # Create text with trailing whitespace programmatically to avoid linting issues
+                                                                                   
     text_with_trailing = "line1   \nline2\t\nline3\nline4 \t "
 
     result = _strip_trailing_whitespace(text_with_trailing)
@@ -564,9 +564,9 @@ def test_strip_trailing_whitespace():
     assert result == expected
 
 
-# ============================================================================
-# Integration Tests for Indentation Correction in apply_diff_patch
-# ============================================================================
+                                                                              
+                                                                  
+                                                                              
 
 
 def test_indentation_correction_in_patch():
@@ -579,7 +579,7 @@ def calculate():
     return area
 # EVOLVE-BLOCK-END"""
 
-    # Patch with incorrect indentation
+                                      
     patch_str = """<<<<<<< SEARCH
 centers = compute_centers()
 radius = get_radius()
@@ -600,7 +600,7 @@ radius = get_new_radius()
     assert error is None
     assert "compute_new_centers()" in updated_content
     assert "get_new_radius()" in updated_content
-    # Verify indentation is preserved
+                                     
     assert "    centers = compute_new_centers()" in updated_content
 
 
@@ -615,7 +615,7 @@ def process_data():
     return None
 # EVOLVE-BLOCK-END"""
 
-    # Patch with no indentation
+                               
     patch_str = """<<<<<<< SEARCH
 if condition:
     data = load_data()
@@ -640,14 +640,14 @@ if new_condition:
     assert error is None
     assert "new_condition" in updated_content
     assert "load_new_data()" in updated_content
-    # Verify proper indentation is applied
+                                          
     assert "    if new_condition:" in updated_content
     assert "        data = load_new_data()" in updated_content
 
 
 def test_indentation_correction_with_trailing_whitespace():
     """Test that indentation correction works with trailing whitespace."""
-    # Create content with trailing whitespace programmatically
+                                                              
     original_content = """# EVOLVE-BLOCK-START
 def func():
     x = 1
@@ -655,7 +655,7 @@ def func():
     return x + y
 # EVOLVE-BLOCK-END"""
 
-    # Patch with trailing whitespace and incorrect indentation
+                                                              
     patch_str = """<<<<<<< SEARCH
 x = 1
 y = 2
@@ -676,7 +676,7 @@ y = 20
     assert error is None
     assert "x = 10" in updated_content
     assert "y = 20" in updated_content
-    # Verify trailing whitespace is stripped
+                                            
     lines = updated_content.split("\n")
     for line in lines:
         assert line == line.rstrip(), f"Line has trailing whitespace: {repr(line)}"
@@ -691,7 +691,7 @@ def func():
     return x + y
 # EVOLVE-BLOCK-END"""
 
-    # Patch with text that doesn't exist
+                                        
     patch_str = """<<<<<<< SEARCH
 z = 3
 w = 4
@@ -711,7 +711,7 @@ w = 40
     assert num_applied == 0
     assert error is not None
     assert "SEARCH text not found" in error
-    assert updated_content == original_content  # Should remain unchanged
+    assert updated_content == original_content                           
 
 
 def test_mixed_indentation_styles():
@@ -723,7 +723,7 @@ def func():
 \treturn x + y
 # EVOLVE-BLOCK-END"""
 
-    # Search with space indentation (should match tab indented lines)
+                                                                     
     patch_str = """<<<<<<< SEARCH
 x = 1  # Tab indented
 y = 2  # Tab indented
@@ -743,7 +743,7 @@ y = 20
     assert num_applied == 1
     assert error is None
     assert "x = 10" in updated_content
-    # Verify original tab indentation is preserved
+                                                  
     assert "\tx = 10" in updated_content
     assert "\ty = 20" in updated_content
 
@@ -800,7 +800,7 @@ def another_immutable():
     z = 3
     return z"""
 
-    # Try to patch something in immutable region (should fail)
+                                                              
     patch_str = """<<<<<<< SEARCH
 x = 1
 =======
@@ -828,7 +828,7 @@ def func():
     return x
 # EVOLVE-BLOCK-END"""
 
-    # Empty search = insertion at end of mutable region
+                                                       
     patch_str = """<<<<<<< SEARCH
 
 =======
@@ -850,9 +850,9 @@ def func():
     assert "y = 2" in updated_content
 
 
-# ============================================================================
-# Tests for Enhanced Error Messages
-# ============================================================================
+                                                                              
+                                   
+                                                                              
 
 
 def test_enhanced_search_not_found_error():
@@ -865,7 +865,7 @@ def calculate():
     return area
 # EVOLVE-BLOCK-END"""
 
-    # Search for similar but not exact text
+                                           
     patch_str = """<<<<<<< SEARCH
 centers = compute_center()
 =======
@@ -900,7 +900,7 @@ def mutable_function():
 if __name__ == "__main__":
     main()"""
 
-    # Try to edit immutable code
+                                
     patch_str = """<<<<<<< SEARCH
 import os
 =======
@@ -921,7 +921,7 @@ import json
     assert "Attempted to edit outside EVOLVE-BLOCK regions" in error
     assert "Context around found text:" in error
     assert "Available editable regions" in error
-    assert "Line" in error  # Should show line numbers in context
+    assert "Line" in error                                       
     assert "Suggestions:" in error
 
 
@@ -933,7 +933,7 @@ def test_enhanced_no_evolve_block_error():
 if __name__ == "__main__":
     print("Hello world")"""
 
-    # Try to insert into file with no EVOLVE-BLOCK
+                                                  
     patch_str = """<<<<<<< SEARCH
 
 =======
@@ -967,7 +967,7 @@ def process():
     return result
 # EVOLVE-BLOCK-END"""
 
-    # Search for multiline block with typo
+                                          
     patch_str = """<<<<<<< SEARCH
 data = load_data()
 result = transform_data(data)

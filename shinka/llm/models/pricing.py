@@ -1,8 +1,8 @@
-# Available models and pricing
-# Anthropic: https://www.anthropic.com/pricing#anthropic-api
-# OpenAI: https://platform.openai.com/docs/pricing
-# DeepSeek: https://api-docs.deepseek.com/quick_start/pricing/
-# Gemini: https://ai.google.dev/gemini-api/docs/pricing
+                              
+                                                            
+                                                  
+                                                              
+                                                       
 
 M = 1000000
 
@@ -122,7 +122,7 @@ OPENAI_MODELS = {
         "input_price": 1.25 / M,
         "output_price": 10.0 / M,
     },
-    # OpenAI-compatible self-hosted models (pricing unknown / not applicable)
+                                                                             
     "Qwen3-30B-A3B": {
         "input_price": 0.0,
         "output_price": 0.0,

@@ -27,26 +27,26 @@ def load_programs_to_df(db_path_str: str) -> Optional[pd.DataFrame]:
         conn = sqlite3.connect(str(db_file))
         cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM programs")  # Fetch all columns
+        cursor.execute("SELECT * FROM programs")                     
         all_program_rows = cursor.fetchall()
 
         if not all_program_rows:
             print(f"No programs found in the database: {db_path_str}")
-            return pd.DataFrame()  # Return empty DataFrame if no programs
+            return pd.DataFrame()                                         
 
-        # Get column names from cursor.description
+                                                  
         column_names = [description[0] for description in cursor.description]
-        # print(column_names)
+                             
         programs_data = []
         for row_tuple in all_program_rows:
-            # Convert row tuple to dict
+                                       
             p_dict = dict(zip(column_names, row_tuple))
 
-            # Metrics and metadata are stored as JSON strings
+                                                             
             metrics_json = p_dict.get("metrics", "{}")
             metrics_dict = json.loads(metrics_json) if metrics_json else {}
 
-            # Parse inspiration_ids JSON
+                                        
             archive_insp_ids_json = p_dict.get("archive_inspiration_ids", "[]")
             archive_insp_ids = (
                 json.loads(archive_insp_ids_json) if archive_insp_ids_json else []
@@ -58,7 +58,7 @@ def load_programs_to_df(db_path_str: str) -> Optional[pd.DataFrame]:
             metadata_json = p_dict.get("metadata", "{}")
             metadata_dict = json.loads(metadata_json) if metadata_json else {}
 
-            # Parse public_metrics and private_metrics
+                                                      
             public_metrics_raw = p_dict.get("public_metrics", "{}")
             if isinstance(public_metrics_raw, str):
                 public_metrics_dict = (
@@ -78,7 +78,7 @@ def load_programs_to_df(db_path_str: str) -> Optional[pd.DataFrame]:
             embedding = p_dict.get("embedding", [])
             if isinstance(embedding, str):
                 embedding = json.loads(embedding)
-            # Create a flat dictionary for the DataFrame
+                                                        
             try:
                 timestamp = pd.to_datetime(p_dict.get("timestamp"), unit="s")
             except Exception:
@@ -141,28 +141,28 @@ def get_path_to_best_node(
     if score_column not in df.columns:
         raise ValueError(f"Column '{score_column}' not found in DataFrame")
 
-    # Create a dictionary mapping id to row for quick lookups
+                                                             
     id_to_row = {row["id"]: row for _, row in df.iterrows()}
 
     print(f"Total rows: {len(df)}")
-    # Only correct rows
+                       
     correct_df = df[df["correct"]]
     print(f"Correct rows: {len(correct_df)}")
 
-    # Find the node with the maximum score
+                                          
     best_node_row = correct_df.loc[correct_df[score_column].idxmax()]
 
-    # Start building the path with the best node
+                                                
     path = [best_node_row.to_dict()]
     current_id = best_node_row["parent_id"]
 
-    # Trace back through parent_ids to construct the path
+                                                         
     while current_id is not None and current_id in id_to_row:
         parent_row = id_to_row[current_id]
         path.append(parent_row.to_dict())
         current_id = parent_row["parent_id"]
 
-    # Reverse to get chronological order (oldest first)
+                                                       
     return pd.DataFrame(path[::-1])
 
 
@@ -189,7 +189,7 @@ def store_best_path(df: pd.DataFrame, results_dir: str):
         base_path = code_dir / f"main_{i}.py"
         base_path.write_text(str(row["code"]))
 
-        # store row data as json, handle non-serializable types
+                                                               
         import datetime
 
         def default_serializer(obj):

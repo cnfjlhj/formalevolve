@@ -60,7 +60,7 @@ def query_anthropic(
             messages=new_msg_history,
             **kwargs,
         )
-        # Separate thinking from non-thinking content
+                                                     
         if len(response.content) == 1:
             thought = ""
             content = response.content[0].text

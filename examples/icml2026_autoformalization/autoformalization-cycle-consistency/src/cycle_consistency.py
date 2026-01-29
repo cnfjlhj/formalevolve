@@ -40,17 +40,17 @@ class FormalizationCandidate:
 @dataclass
 class CycleConsistencyResult:
     """Result of cycle consistency autoformalization"""
-    # Input
+           
     informal_statement: str
 
-    # Best result
+                 
     best_formalization: str
     best_score: float
 
-    # All candidates (sorted by score, descending)
+                                                  
     all_candidates: List[FormalizationCandidate] = field(default_factory=list)
 
-    # Metadata
+              
     num_candidates_generated: int = 0
     total_tokens_used: int = 0
 
@@ -123,7 +123,7 @@ class CycleConsistencyAutoformalization:
 
         logger.info(f"Autoformalize: '{informal_statement[:50]}...' with {n} candidates")
 
-        # Step 1: Generate N formalization candidates
+                                                     
         candidates = self._generate_candidates(
             informal_statement,
             n=n,
@@ -140,7 +140,7 @@ class CycleConsistencyAutoformalization:
 
         logger.info(f"Generated {len(candidates)} candidates")
 
-        # Step 2: Score each candidate using cycle consistency
+                                                              
         scored_candidates = []
         for i, candidate in enumerate(candidates):
             score_result = self._compute_cycle_consistency_score(
@@ -148,7 +148,7 @@ class CycleConsistencyAutoformalization:
                 formal_statement=candidate,
             )
 
-            # Use normalized score if configured
+                                                
             if self.config.cycle_consistency.normalize_by_length:
                 score = score_result.normalized_log_prob
             else:
@@ -164,12 +164,12 @@ class CycleConsistencyAutoformalization:
             if self.config.verbose:
                 logger.info(f"  Candidate {i+1}: score={score:.2f}, tokens={score_result.num_tokens}")
 
-        # Step 3: Sort by score (descending) and assign ranks
+                                                             
         scored_candidates.sort(key=lambda x: x.normalized_score, reverse=True)
         for rank, cand in enumerate(scored_candidates):
             cand.rank = rank + 1
 
-        # Best candidate
+                        
         best = scored_candidates[0]
 
         logger.info(f"Best candidate: score={best.normalized_score:.2f}")
@@ -191,13 +191,13 @@ class CycleConsistencyAutoformalization:
     ) -> List[str]:
         """Generate N formalization candidates."""
 
-        # Build prompt
+                      
         prompt = self._build_formalization_prompt(
             informal_statement,
             few_shot_examples=few_shot_examples,
         )
 
-        # Generate N candidates
+                               
         results = self.formalizer.generate(
             prompt=prompt,
             system_prompt=self.config.prompt.formalize_system,
@@ -206,11 +206,11 @@ class CycleConsistencyAutoformalization:
             n=n,
         )
 
-        # Extract and clean formalizations
+                                          
         candidates = []
         for result in results:
             formal = self._extract_lean_code(result.text)
-            if formal and formal not in candidates:  # Deduplicate
+            if formal and formal not in candidates:               
                 candidates.append(formal)
 
         return candidates
@@ -224,13 +224,13 @@ class CycleConsistencyAutoformalization:
 
         parts = []
 
-        # Add few-shot examples if provided
+                                           
         if few_shot_examples:
             for informal, formal in few_shot_examples:
                 parts.append(f"Natural language: {informal}")
                 parts.append(f"Lean 4:\n```lean4\n{formal}\n```\n")
 
-        # Add the target statement
+                                  
         parts.append(
             self.config.prompt.formalize_template.format(
                 informal_statement=informal_statement
@@ -251,12 +251,12 @@ class CycleConsistencyAutoformalization:
         Score = log P(informal_statement | "Informalize: {formal_statement}")
         """
 
-        # Build informalization prompt
+                                      
         prompt = self.config.prompt.informalize_template.format(
             formal_statement=formal_statement
         )
 
-        # Compute log probability of original informal statement
+                                                                
         result = self.informalizer.compute_log_prob(
             prompt=prompt,
             completion=informal_statement,
@@ -268,18 +268,18 @@ class CycleConsistencyAutoformalization:
     def _extract_lean_code(self, text: str) -> Optional[str]:
         """Extract Lean code from LLM output."""
 
-        # Try to find code block
+                                
         code_block_match = re.search(r'```lean4?\s*(.*?)```', text, re.DOTALL)
         if code_block_match:
             return code_block_match.group(1).strip()
 
-        # Try to find theorem statement directly
+                                                
         theorem_match = re.search(r'(theorem\s+\w+.*?:=\s*by\s+sorry)', text, re.DOTALL)
         if theorem_match:
             return theorem_match.group(1).strip()
 
-        # If no pattern found, try to clean and return as-is
-        # (assuming the model output clean Lean code)
+                                                            
+                                                     
         cleaned = text.strip()
         if cleaned.startswith('theorem') or cleaned.startswith('import'):
             return cleaned

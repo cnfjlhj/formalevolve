@@ -49,7 +49,7 @@ def sample_batch_kwargs(
     """Sample a dictionary of kwargs for a given model."""
     all_kwargs = []
     attempts = 0
-    max_attempts = num_samples * 10  # Prevent infinite loops
+    max_attempts = num_samples * 10                          
 
     while len(all_kwargs) < num_samples and attempts < max_attempts:
         kwargs_dict = sample_model_kwargs(
@@ -86,7 +86,7 @@ def sample_model_kwargs(
     model_sample_probs: Optional[List[float]] = None,
 ):
     """Sample a dictionary of kwargs for a given model."""
-    # Make all inputs lists
+                           
     if isinstance(model_names, str):
         model_names = [model_names]
     if isinstance(temperatures, float):
@@ -97,7 +97,7 @@ def sample_model_kwargs(
         reasoning_efforts = [reasoning_efforts]
 
     kwargs_dict = {}
-    # perform model sampling if list provided
+                                             
     if model_sample_probs is not None:
         if len(model_sample_probs) != len(model_names):
             raise ValueError(
@@ -111,8 +111,8 @@ def sample_model_kwargs(
     else:
         kwargs_dict["model_name"] = random.choice(model_names)
 
-    # perform temperature sampling if list provided
-    # set temperature to 1.0 for reasoning models
+                                                   
+                                                 
     if kwargs_dict["model_name"] in (
         REASONING_OAI_MODELS
         + REASONING_CLAUDE_MODELS
@@ -125,8 +125,8 @@ def sample_model_kwargs(
     else:
         kwargs_dict["temperature"] = random.choice(temperatures)
 
-    # perform reasoning effort sampling if list provided
-    # set max_completion_tokens for OAI reasoning models
+                                                        
+                                                        
     if kwargs_dict["model_name"] in (REASONING_OAI_MODELS + REASONING_AZURE_MODELS):
         kwargs_dict["max_output_tokens"] = random.choice(max_tokens)
         r_effort = random.choice(reasoning_efforts)
@@ -158,11 +158,11 @@ def sample_model_kwargs(
         r_effort = random.choice(reasoning_efforts)
         think_bool = r_effort != "auto"
         if think_bool:
-            # filter thinking tokens to be smaller than max_tokens
-            # not auto THINKING_TOKENS
+                                                                  
+                                      
             t = THINKING_TOKENS[r_effort]
             thinking_tokens = t if t < kwargs_dict["max_tokens"] else 1024
-            # sample only from thinking tokens that are valid
+                                                             
             kwargs_dict["thinking"] = {
                 "type": "enabled",
                 "budget_tokens": thinking_tokens,
@@ -209,7 +209,7 @@ def query(
     elif model_name in GEMINI_MODELS.keys():
         query_fn = query_gemini
     elif os.environ.get("OPENAI_LLM_BASE_URL"):
-        # Fallback: use OpenAI-compatible query for custom models (e.g., vLLM)
+                                                                              
         query_fn = query_openai
     else:
         raise ValueError(f"Model {model_name} not supported.")

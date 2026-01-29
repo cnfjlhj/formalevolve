@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 Paper-aligned summary metrics from per-problem runs.
 
@@ -55,8 +55,8 @@ def _load_json(path: Path) -> Dict[str, Any]:
 
 def _detect_runs_dir(run_root: Path) -> Path:
     candidates = [
-        run_root / "runs" / "ours",  # legacy wrapper layout
-        run_root / "runs",  # run_dataset_pilot layout
+        run_root / "runs" / "ours",                         
+        run_root / "runs",                            
     ]
     for cand in candidates:
         if not cand.exists():
@@ -83,7 +83,7 @@ def _gini(values: Sequence[int], eps: float = 1e-12) -> float:
     weighted_sum = 0.0
     for i, v in enumerate(xs, start=1):
         weighted_sum += float(i) * float(v)
-    # Equivalent to the pairwise-absolute-difference definition.
+                                                                
     return (2.0 * weighted_sum) / (float(n) * (total + eps)) - (float(n) + 1.0) / float(n)
 
 
@@ -102,10 +102,10 @@ def _topk_share(values: Sequence[int], frac: float = 0.10) -> float:
 def _import_statement_utils() -> Tuple[Any, Any]:
     """Import statement normalization helpers from the evaluator."""
     here = Path(__file__).resolve()
-    # examples/icml2026_autoformalization/scripts -> examples/icml2026_autoformalization
+                                                                                        
     root = here.parents[1]
     sys.path.insert(0, str(root))
-    from evaluate import normalize_lean_statement, normalize_decl_name_for_cycle_prompt  # type: ignore
+    from evaluate import normalize_lean_statement, normalize_decl_name_for_cycle_prompt                
 
     return normalize_lean_statement, normalize_decl_name_for_cycle_prompt
 
@@ -121,7 +121,7 @@ def _canonicalize_statement(
     if not stmt:
         return ""
     stmt2, _orig = normalize_decl_name_for_cycle_prompt(stmt, normalized_name=canonical_decl_name)
-    # Whitespace normalization for stable dedup keys.
+                                                     
     return "\n".join(ln.rstrip() for ln in (stmt2 or "").splitlines()).strip()
 
 
@@ -330,7 +330,7 @@ def main() -> int:
     out_json.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     _write_csv(out_csv, rows)
 
-    # Also print a concise summary (stdout) for quick CLI usage.
+                                                                
     n = int(meta.get("num_problems_present", 0) or 0)
     print(f"[paper_summary] run_root={run_root}")
     print(f"[paper_summary] problems={n} CH@T={meta.get('CH_at_T'):.3f} SH@T={meta.get('SH_at_T'):.3f}")

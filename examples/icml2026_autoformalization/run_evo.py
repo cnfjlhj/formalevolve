@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 """
 FormalEvolve runner for Lean4 Autoformalization.
 
@@ -46,20 +46,20 @@ import os
 import sys
 from pathlib import Path
 
-# Load .env first
+                 
 from dotenv import load_dotenv
 BASE_DIR = Path(__file__).parent
 env_path = BASE_DIR.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 
-# Add project root to path
+                          
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-# =============================================================================
-# IMPORTANT: Patch Shinka prompts BEFORE importing shinka.core
-# =============================================================================
-# The original `shinka/prompts` are designed for generic code generation and are a poor fit
-# for Lean 4 autoformalization. We monkey-patch them so the evolution loop uses Lean 4 prompts.
+                                                                               
+                                                              
+                                                                               
+                                                                                           
+                                                                                               
 from prompts_lean4 import patch_all
 patch_all()
 
@@ -67,24 +67,24 @@ from shinka.core import EvolutionConfig
 from shinka.database import DatabaseConfig
 from shinka.launch import LocalJobConfig
 
-# Use AutoformalizationRunner with repair_queue support
+                                                       
 from autoformal_runner import AutoformalizationRunner, RepairConfig, TerminationConfig
 
 
-# =============================================================================
-# Default problem (for quick tests / demos)
-# =============================================================================
-#
-# Why keep a default problem?
-# 1. Quick sanity checks: avoid passing CLI flags every time
-# 2. Example/demo: documents the expected input format
-# 3. Regression checks: ensures the pipeline still runs end-to-end
-#
-# Why this particular default?
-# - Simple but non-trivial: needs Lean knowledge to formalize correctly
-# - Has a clear ground truth: convenient for BEq+ checks
-# - Typical theorem shape: a divisibility claim
-# =============================================================================
+                                                                               
+                                           
+                                                                               
+ 
+                             
+                                                            
+                                                      
+                                                                  
+ 
+                              
+                                                                       
+                                                        
+                                               
+                                                                               
 
 DEFAULT_INFORMAL = """
 Prove that for any odd natural number n, 8 divides n^2 - 1.
@@ -94,30 +94,30 @@ DEFAULT_HEADER = """import Mathlib
 
 open Function Fintype Subgroup Ideal Polynomial Submodule Zsqrtd RingHom
 open scoped BigOperators"""
-# Header notes
-# - import Mathlib: import the full Mathlib library (definitions + theorems)
-# - open xxx: open namespaces so you can use definitions without prefixes
-# - open scoped BigOperators: enable ∑ and ∏ notations
+              
+                                                                            
+                                                                         
+                                                      
 
 DEFAULT_GROUND_TRUTH = """
 theorem odd_sq_sub_one_div_eight (n : ℕ) (hn : Odd n) : 8 ∣ n^2 - 1 := by sorry
 """
-# Ground-truth notes
-# - theorem xxx: theorem name (convention: descriptive, snake_case)
-# - (n : ℕ): explicit parameter, a natural number n
-# - (hn : Odd n): hypothesis, a proof that n is odd
-# - 8 ∣ n^2 - 1: conclusion, 8 divides n²-1
-# - := by sorry: proof placeholder (we only care about the statement)
+                    
+                                                                   
+                                                   
+                                                   
+                                           
+                                                                     
 
 
-# =============================================================================
-# Task System Message（no dataset header）
-# =============================================================================
-#
-# NOTE:
-# - To avoid dataset-header contamination, we do not inject dataset headers into prompts.
-# - The model still must output a *complete Lean file* (imports + theorem) so we can compile/evaluate it.
-# =============================================================================
+                                                                               
+                                        
+                                                                               
+ 
+       
+                                                                                         
+                                                                                                         
+                                                                               
 
 def build_task_sys_msg(informal: str, header: str) -> str:
     """
@@ -161,34 +161,34 @@ Natural language statement:
 {informal.strip()}
 
 Return ONLY the Lean code block."""
-# =============================================================================
-# Config construction
-# =============================================================================
-#
-# Config hierarchy
-# ShinkaEvolve uses multiple config objects to control different aspects:
-#
-# ┌─────────────────┐
-# │  EvolutionConfig │ ← evolution algorithm params (gens, parallelism, LLM settings)
-# └─────────────────┘
-# ┌─────────────────┐
-# │    JobConfig     │ ← job execution (evaluator entrypoint path)
-# └─────────────────┘
-# ┌─────────────────┐
-# │  DatabaseConfig  │ ← archive DB config (size, sampling)
-# └─────────────────┘
-# ┌─────────────────┐
-# │   RepairConfig   │ ← compile-repair config (attempts, temperature)
-# └─────────────────┘
-# ┌─────────────────┐
-# │  ProblemConfig   │ ← problem description (for evaluator)
-# └─────────────────┘
-#
-# Why so many configs?
-# 1. Separation of concerns: each config controls one dimension
-# 2. Reasonable defaults: most runs shouldn't need to tweak everything
-# 3. Extensibility: adding new knobs doesn't break existing code
-# =============================================================================
+                                                                               
+                     
+                                                                               
+ 
+                  
+                                                                         
+ 
+                     
+                                                                                     
+                     
+                     
+                                                                  
+                     
+                     
+                                                           
+                     
+                     
+                                                                      
+                     
+                     
+                                                            
+                     
+ 
+                      
+                                                               
+                                                                      
+                                                                
+                                                                               
 
 def create_configs(
     informal: str,
@@ -209,7 +209,7 @@ def create_configs(
     novelty_llm_models: list[str] | None = None,
     novelty_llm_disabled: bool = False,
     num_init_candidates_gen0: int = 3,
-    # Parent sampling: align with circle_packing_backup defaults (combined_score-driven).
+                                                                                         
     parent_selection_strategy: str = "weighted",
     num_archive_inspirations: int = 4,
     num_top_k_inspirations: int = 2,
@@ -253,46 +253,46 @@ def create_configs(
     baseline_mode_norm = baseline_mode_str.lower()
     is_baseline_mode = baseline_mode_norm != "ours"
 
-    # =========================================================================
-    # 1. Problem Config
-    # =========================================================================
-    # This config is written to disk so `evaluate.py` (a subprocess) can load it.
-    #
-    # Why write to a file?
-    # `evaluate.py` is executed as a separate process; we cannot pass a rich object graph
-    # via function args, so file-based communication is the simplest option.
+                                                                               
+                       
+                                                                               
+                                                                                 
+     
+                          
+                                                                                         
+                                                                            
     problem_config = {
-        "informal": informal,      # natural-language statement
-        "header": header,          # Lean4 header（import/open）
-        "ground_truth": ground_truth,  # reference statement (for BEq+)
-        "use_beq": use_beq,        # enable BEq+ check
-        # Optional: a seed bank directory containing gen_0/seed_i/ programs.
-        # When provided, AutoformalizationRunner will reuse these initial programs.
+        "informal": informal,                                  
+        "header": header,                                     
+        "ground_truth": ground_truth,                                  
+        "use_beq": use_beq,                           
+                                                                            
+                                                                                   
         "init_programs_dir": "",
-        # --- experiment protocol (for auditability) ---
+                                                        
         "baseline_mode": baseline_mode_str,
         "seed": seed,
-        # --- no-LLM / replay metadata (for audit & evaluator behavior) ---
-        # llm_mode affects the generator/repair side; no_llm affects evaluator (cycle/critic).
+                                                                           
+                                                                                              
         "llm_mode": str(llm_mode or "auto"),
         "no_llm": bool(no_llm),
         "replay_path": replay_path,
         "mock_statements_path": mock_statements_path,
-        # Record the base URL used for generation (for post-run audits).
+                                                                        
         "openai_llm_base_url": os.environ.get("OPENAI_LLM_BASE_URL", ""),
-        # Default: disable semantic 0/1 judge (noisy)
+                                                     
         "use_semantic": False,
-        # Default: disable cycle-consistency (noisy / service-dependent)
+                                                                        
         "use_cycle_consistency": False,
-        # Cycle-consistency model config (OpenAI-compatible)
+                                                            
         "cycle_api_base_url": os.environ.get("CYCLE_API_BASE_URL", "http://127.0.0.1:8090/v1"),
         "cycle_model_name": os.environ.get("CYCLE_MODEL_NAME", "Qwen2.5-32B-Instruct"),
         "informalize_prompt_template": os.environ.get("INFORMALIZE_PROMPT_TEMPLATE", "Informalize: {formal_statement}"),
-        # Reduce evaluation variance from semantically irrelevant declaration naming noise.
+                                                                                           
         "cycle_normalize_decl_name": os.environ.get("AUTOFORMAL_CYCLE_NORMALIZE_DECL_NAME", "true").lower()
         in {"1", "true", "yes", "y", "on"},
         "cycle_normalized_decl_name": os.environ.get("AUTOFORMAL_CYCLE_NORMALIZED_DECL_NAME", "my_theorem"),
-        # Future-proof: if semantic / BEq are enabled, normalize decl names too.
+                                                                                
         "semantic_normalize_decl_name": os.environ.get("AUTOFORMAL_SEMANTIC_NORMALIZE_DECL_NAME", "true").lower()
         in {"1", "true", "yes", "y", "on"},
         "semantic_normalized_decl_name": os.environ.get("AUTOFORMAL_SEMANTIC_NORMALIZED_DECL_NAME", "my_theorem"),
@@ -303,21 +303,21 @@ def create_configs(
         "cycle_softmax_temperature": float(os.environ.get("SOFTMAX_TEMPERATURE", "3.5")),
         "cycle_temperature": float(os.environ.get("CYCLE_TEMPERATURE", "0.0")),
         "cycle_max_tokens": int(os.environ.get("CYCLE_MAX_TOKENS", "1024")),
-        # --- scoring (for auditability; evaluator uses these weights) ---
-        # combined_score = compile_ok * (base + cycle_w*cycle + semantic_bonus*semantic_ok + beq_bonus*beq_ok)
-        # Defaults are chosen to ensure: beq > semantic > cycle (even if semantic is noisy).
+                                                                          
+                                                                                                              
+                                                                                            
         "score_base": float(os.environ.get("AUTOFORMAL_SCORE_BASE", "100")),
         "score_cycle_weight": float(os.environ.get("AUTOFORMAL_SCORE_CYCLE_WEIGHT", "50")),
         "score_semantic_bonus": float(os.environ.get("AUTOFORMAL_SCORE_SEMANTIC_BONUS", "100")),
         "score_beq_bonus": float(os.environ.get("AUTOFORMAL_SCORE_BEQ_BONUS", "200")),
-        "compile_timeout": 600,     # compile timeout (seconds) - 10 minutes for harder theorems
-        # Lean Server HTTP endpoint (Kimina Lean Server docs: http://localhost:8001/docs)
+        "compile_timeout": 600,                                                                 
+                                                                                         
         "lean_server_url": os.environ.get(
             "LEAN_SERVER_URL", "local"
         ),
     }
 
-    # Allow --config / external problem configs to override evaluator settings.
+                                                                               
     if problem_overrides:
         allowed_override_keys = {
             "use_beq",
@@ -349,7 +349,7 @@ def create_configs(
             if k in problem_overrides:
                 problem_config[k] = problem_overrides[k]
 
-    # Write per-run problem config into the results directory to support parallel runs.
+                                                                                       
     run_root = Path(results_dir)
     run_root.mkdir(parents=True, exist_ok=True)
     config_path = run_root / "problem_config.json"
@@ -357,7 +357,7 @@ def create_configs(
         json.dump(problem_config, f, indent=2, ensure_ascii=False)
     print(f"[Config] Problem config saved to {config_path}")
 
-    # Optional legacy write for single-run workflows (NOT recommended for parallel runs).
+                                                                                         
     if os.environ.get("AUTOFORMAL_WRITE_GLOBAL_PROBLEM_CONFIG", "").lower() in {
         "1",
         "true",
@@ -368,12 +368,12 @@ def create_configs(
             json.dump(problem_config, f, indent=2, ensure_ascii=False)
         print(f"[Config] (Legacy) Problem config also saved to {legacy_path}")
 
-    # =========================================================================
-    # 2. Repair Config
-    # =========================================================================
-    # Temperature protocol (repair):
-    # - Compile-repair is prone to "no-op / echo" at temperature=0.0.
-    # - Default to a higher fixed temperature to reduce duplicate attempts.
+                                                                               
+                      
+                                                                               
+                                    
+                                                                     
+                                                                           
     repair_temperature = float(os.environ.get("AUTOFORMAL_REPAIR_TEMPERATURE", "0.7"))
     repair_config = RepairConfig(
         num_init_candidates_gen0=int(num_init_candidates_gen0),
@@ -382,40 +382,40 @@ def create_configs(
         enabled=True,
     )
 
-    # =========================================================================
-    # 3. Job Config
-    # =========================================================================
-    # Path to the evaluator entrypoint. ShinkaEvolve calls:
-    #   python evaluate.py --program_path xxx --results_dir xxx
+                                                                               
+                   
+                                                                               
+                                                           
+                                                               
     job_config = LocalJobConfig(
         eval_program_path=str(BASE_DIR / "evaluate.py"),
     )
 
-    # =========================================================================
-    # 4. Database Config
-    # =========================================================================
-    # Controls archive behavior.
-    #
-    # Key params
-    # - num_islands: number of islands (parallel sub-populations exploring different directions)
-    # - archive_size: global archive cap (shared across islands; not "per-island")
-    # - elite_selection_ratio: elite selection ratio (for inspiration sampling)
-    # - num_archive_inspirations: inspirations sampled from archive
-    # - num_top_k_inspirations: inspirations sampled from top-k
-    # - parent_selection_strategy: parent selection strategy
-    #   - "weighted": fitness-weighted sampling (better candidates are more likely)
-    #   - "uniform": uniform sampling
-    # - parent_selection_lambda: temperature for weighted sampling
-    #
-    # Notes:
-    # - Although there are multiple islands logically (`programs.island_idx`), the current archive
-    #   implementation is a single shared table. `archive_size` caps the *global* number of retained
-    #   correct programs, not per-island retention.
-    # - Island imbalance can happen (some problems may even have empty archives for some islands).
-    #
-    # IMPORTANT (for ablations):
-    # - Allow env overrides in ours-mode so we can run `num_islands=1 vs 2` without touching code.
-    # - Baseline modes keep their semantics (no islands / archive disabled).
+                                                                               
+                        
+                                                                               
+                                
+     
+                
+                                                                                                
+                                                                                  
+                                                                               
+                                                                   
+                                                               
+                                                            
+                                                                                   
+                                     
+                                                                  
+     
+            
+                                                                                                  
+                                                                                                    
+                                                   
+                                                                                                  
+     
+                                
+                                                                                                  
+                                                                            
     def _cfg_int_env(name: str, default: int, *, min_value: int = 1) -> int:
         raw = str(os.environ.get(name, "")).strip()
         if not raw:
@@ -475,9 +475,9 @@ def create_configs(
     )
     db_config = DatabaseConfig(
         db_path="evolution_db.sqlite",
-        # Baseline modes do not use islands for sampling; avoid initial-program auto-copy.
+                                                                                          
         num_islands=int(num_islands_eff),
-        # Baseline modes do not use archive/parent sampling; force-disable archive updates.
+                                                                                           
         archive_size=int(archive_size_eff),
         elite_selection_ratio=0.3,
         num_archive_inspirations=int(num_archive_inspirations),
@@ -494,46 +494,46 @@ def create_configs(
         parent_selection_lambda=_cfg_float_env("AUTOFORMAL_PARENT_SELECTION_LAMBDA", 10.0, min_value=0.0),
     )
 
-    # =========================================================================
-    # 5. Evolution Config
-    # =========================================================================
-    # This is the core config that controls the evolution algorithm.
+                                                                               
+                         
+                                                                               
+                                                                    
     task_sys_msg = build_task_sys_msg(informal, header)
     meta_interval = int(os.environ.get("META_REC_INTERVAL", "10"))
     meta_rec_interval = meta_interval if meta_interval > 0 else None
 
     llm_models_list = [m.strip() for m in (os.environ.get("AUTOFORMAL_LLM_MODELS") or "").split(",") if m.strip()]
-    # Normalize local path-like model names: vLLM/OpenAI-compatible servers typically register the directory path
-    # without a trailing slash, so keep ids stable by stripping it.
+                                                                                                                 
+                                                                   
     llm_models_list = [m.rstrip("/") for m in llm_models_list]
     if not llm_models_list:
-        # Default: a reasonable placeholder name (users should override via --llm_models).
-        # We intentionally avoid hard-coding any local filesystem paths here.
+                                                                                          
+                                                                             
         llm_models_list = ["Kimina-Autoformalizer-7B"]
 
-    # Disable meta-LLM in offline/no-LLM modes to keep the smoke pipeline deterministic.
+                                                                                        
     offline_mode = str(llm_mode or "").lower() in {"mock", "replay"}
     if offline_mode or no_llm:
         meta_rec_interval = None
-    # Baseline modes should not use meta-LLM (keep budgets comparable).
+                                                                       
     if is_baseline_mode:
         meta_rec_interval = None
 
-    # Novelty filtering defaults:
-    # - Off by default for Lean4 autoformalization (set embedding_model to enable).
-    # - Novelty LLM is optional; if None, high-similarity samples are rejected by embedding threshold alone.
+                                 
+                                                                                   
+                                                                                                            
     embedding_model_eff = str(embedding_model or "").strip()
     if embedding_model_eff.lower() in {"", "none", "null"}:
         embedding_model_eff = ""
     if offline_mode or no_llm:
-        # Keep offline/no-LLM modes deterministic and free of hidden dependencies by default.
+                                                                                             
         embedding_model_eff = ""
     novelty_llm_models_eff: list[str] | None = novelty_llm_models
     if embedding_model_eff == "":
         novelty_llm_models_eff = None
     if offline_mode or no_llm:
         novelty_llm_models_eff = None
-    # Explicit opt-out: `--novelty_llm_models none` should disable novelty-LLM even in ours mode.
+                                                                                                 
     if novelty_llm_disabled:
         novelty_llm_models_eff = None
     if (
@@ -542,8 +542,8 @@ def create_configs(
         and not (offline_mode or no_llm)
         and not novelty_llm_disabled
     ):
-        # Default: use the generator models as the novelty judge LLM.
-        # Baselines keep novelty-LLM disabled by default to avoid introducing an extra judge unless requested.
+                                                                     
+                                                                                                              
         novelty_llm_models_eff = None if is_baseline_mode else llm_models_list
 
     patch_types_eff = patch_types or ["full", "diff", "cross"]
@@ -559,8 +559,8 @@ def create_configs(
         raise ValueError("patch_type_probs must sum to a positive value")
     patch_type_probs_eff = [float(p) / s for p in patch_type_probs_eff]
 
-    # Temperature schedule (Shinka-aligned multi-temperature sampling).
-    # Format: comma-separated floats, e.g. "0,0.5,1.0".
+                                                                       
+                                                       
     temps_raw = str(os.environ.get("AUTOFORMAL_TEMPERATURES", "0,0.5,1.0")).strip()
     temperatures: list[float] = []
     for part in temps_raw.split(","):
@@ -585,46 +585,46 @@ def create_configs(
         return max(int(min_value), int(v))
 
     evo_config = EvolutionConfig(
-        # --- Prompt config ---
-        task_sys_msg=task_sys_msg,  # LLM system message
+                               
+        task_sys_msg=task_sys_msg,                      
 
-        # --- Patch-type config ---
-        # Patch types:
-        # - "full": rewrite from scratch
-        # - "diff": local edit based on parent
-        # - "cross": crossover (combine multiple parents)
+                                   
+                      
+                                        
+                                              
+                                                         
         patch_types=patch_types_eff,
         patch_type_probs=patch_type_probs_eff,
 
-        # --- Evolution parameters ---
+                                      
         num_generations=num_generations,
-        max_parallel_jobs=int(max_parallel_jobs),  # parallel jobs within a single problem run
-        max_patch_resamples=_cfg_int("AUTOFORMAL_MAX_PATCH_RESAMPLES", 3),  # resamples if generation fails
-        # Paper-aligned default: one patch attempt per step (can be overridden via env).
-        max_patch_attempts=_cfg_int("AUTOFORMAL_MAX_PATCH_ATTEMPTS", 1),  # max attempts per patch
+        max_parallel_jobs=int(max_parallel_jobs),                                             
+        max_patch_resamples=_cfg_int("AUTOFORMAL_MAX_PATCH_RESAMPLES", 3),                                 
+                                                                                        
+        max_patch_attempts=_cfg_int("AUTOFORMAL_MAX_PATCH_ATTEMPTS", 1),                          
 
-        # --- Job type ---
-        job_type="local",           # local execution (vs. distributed)
-        language="lean",            # code language (LLM output)
+                          
+        job_type="local",                                              
+        language="lean",                                        
 
-        # --- LLM config ---
-        # Uses the framework's OpenAI(-compatible) model interface (see shinka/llm/models/pricing.py).
+                            
+                                                                                                      
         llm_models=llm_models_list,
-        # Evolution multi-temperature (sampled per call).
+                                                         
         llm_kwargs=dict(
             temperatures=temperatures,
-            # Some OpenAI-compatible servers reject large `max_tokens` (e.g., 4096 may 400/500).
-            # Keep a conservative default and allow override via env for different backends.
+                                                                                                
+                                                                                            
             max_tokens=int(os.environ.get("AUTOFORMAL_LLM_MAX_TOKENS", "2048")),
         ),
 
-        # --- Advanced features ---
-        # meta_rec_interval: meta-recommendation refresh interval (triggered by evaluated program count).
-        # Enabled by default and kept short (Lean statements benefit from short, concrete rules).
+                                   
+                                                                                                         
+                                                                                                 
         meta_rec_interval=meta_rec_interval,
-        # IMPORTANT: if meta_rec_interval is disabled (None), also disable meta-LLM entirely.
-        # Otherwise MetaSummarizer will accumulate all programs and try a huge "final summary"
-        # that can exceed the model context window and stall the run at shutdown.
+                                                                                             
+                                                                                              
+                                                                                 
         meta_llm_models=None if (offline_mode or no_llm or meta_rec_interval is None) else llm_models_list,
         meta_llm_kwargs=dict(
             temperatures=[0.0],
@@ -633,7 +633,7 @@ def create_configs(
         llm_dynamic_selection="ucb1",
         llm_dynamic_selection_kwargs=dict(exploration_coef=1.0),
 
-        # code_embed_sim_threshold: novelty threshold
+                                                     
         code_embed_sim_threshold=float(code_embed_sim_threshold),
         embedding_model=(embedding_model_eff or None),
         max_novelty_attempts=int(max_novelty_attempts),
@@ -643,8 +643,8 @@ def create_configs(
             max_tokens=int(os.environ.get("AUTOFORMAL_NOVELTY_LLM_MAX_TOKENS", os.environ.get("AUTOFORMAL_LLM_MAX_TOKENS", "2048"))),
         ),
 
-        # --- File paths ---
-        # Baseline modes should generate independent samples (ignore seed0 file).
+                            
+                                                                                 
         init_program_path=(None if is_baseline_mode else (init_program_path or str(BASE_DIR / "initial.lean"))),
         results_dir=results_dir,
     )
@@ -660,18 +660,18 @@ def create_configs(
     return evo_config, job_config, db_config, repair_config, termination_config, problem_config
 
 
-# =============================================================================
-# Main
-# =============================================================================
-#
-# Execution flow
-# 1. Parse CLI args
-# 2. Print run info (for debugging/auditing)
-# 3. Create configs
-# 4. Create AutoformalizationRunner
-# 5. Run evolution
-# 6. Print stats
-# =============================================================================
+                                                                               
+      
+                                                                               
+ 
+                
+                   
+                                            
+                   
+                                   
+                  
+                
+                                                                               
 
 def main():
     parser = argparse.ArgumentParser(
@@ -986,7 +986,7 @@ def main():
 
     args = parser.parse_args()
 
-    # Seed RNGs early for auditability (does not guarantee deterministic LLM outputs).
+                                                                                      
     if args.seed is not None:
         import random
         import numpy as np
@@ -994,7 +994,7 @@ def main():
         random.seed(int(args.seed))
         np.random.seed(int(args.seed))
 
-    # Configure OpenAI-compatible endpoints for this run (generation vs embeddings).
+                                                                                    
     if args.openai_llm_base_url:
         os.environ["OPENAI_LLM_BASE_URL"] = args.openai_llm_base_url
         os.environ.setdefault("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY", "EMPTY"))
@@ -1005,7 +1005,7 @@ def main():
     else:
         os.environ.pop("OPENAI_NOVELTY_LLM_BASE_URL", None)
 
-    # Models list for EvolutionConfig is read from env inside create_configs().
+                                                                               
     os.environ["AUTOFORMAL_LLM_MODELS"] = args.llm_models
     if args.patch_openai_llm_base_url:
         os.environ["AUTOFORMAL_PATCH_OPENAI_LLM_BASE_URL"] = args.patch_openai_llm_base_url
@@ -1036,7 +1036,7 @@ def main():
     if args.patch_type_probs:
         os.environ["AUTOFORMAL_PATCH_TYPE_PROBS"] = str(args.patch_type_probs)
 
-    # no-LLM / offline controls
+                               
     if args.no_llm:
         args.llm_mode = "mock"
         os.environ["AUTOFORMAL_NO_LLM"] = "1"
@@ -1048,7 +1048,7 @@ def main():
     if args.mock_statements_path:
         os.environ["AUTOFORMAL_MOCK_STATEMENTS_PATH"] = str(args.mock_statements_path)
 
-    # If a config file is provided, load problem fields from it.
+                                                                
     config_data = None
     if args.config:
         import json
@@ -1113,7 +1113,7 @@ def main():
         patch_type_probs=[float(x.strip()) for x in args.patch_type_probs.split(",") if x.strip()] if args.patch_type_probs else None,
         num_generations=args.num_generations,
         max_parallel_jobs=args.max_parallel_jobs,
-        # evolution-level novelty settings
+                                          
         max_repair_attempts=args.max_repair_attempts,
         max_llm_calls=args.max_llm_calls,
         max_evals=args.max_evals,
@@ -1123,13 +1123,13 @@ def main():
         init_program_path=args.init_program,
     )
 
-    # Disable repair if requested
+                                 
     if args.disable_repair:
         repair_config.enabled = False
     if args.max_repair_attempts_gen0 is not None:
         repair_config.max_repair_attempts_gen0 = int(args.max_repair_attempts_gen0)
 
-    # Create and run evolution with AutoformalizationRunner
+                                                           
     runner = AutoformalizationRunner(
         evo_config=evo_config,
         job_config=job_config,
@@ -1146,7 +1146,7 @@ def main():
     print("Evolution complete!")
     print(f"Results saved to: {args.results_dir}")
 
-    # Print repair statistics
+                             
     repair_stats = runner.get_repair_stats()
     print(f"Repair LLM calls: {repair_stats['total_repair_llm_calls']}")
     print(f"Repair evals: {repair_stats['total_repair_evals']}")

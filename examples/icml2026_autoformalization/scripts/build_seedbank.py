@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -94,15 +94,15 @@ def _write_problem_inputs(
         "informal": problem.informal,
         "header": problem.header,
         "ground_truth": problem.ground_truth,
-        # Seedbank building is compile-only by default.
+                                                       
         "use_beq": False,
         "use_semantic": False,
         "use_cycle_consistency": False,
         "compile_timeout": int(compile_timeout),
         "lean_server_url": str(lean_server_url),
-        # No seedbank when building one.
+                                        
         "init_programs_dir": "",
-        # Run metadata (helps local audits; do not commit outputs).
+                                                                   
         "baseline_mode": "ours",
         "llm_mode": "auto",
         "no_llm": False,
@@ -139,7 +139,7 @@ def _copy_seedbank_gen0(run_root: Path, seedbank_problem_root: Path, seeds: int)
         dst_seed = dst_gen0 / f"seed_{i}"
         (dst_seed / "results").mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_main, dst_seed / "main.lean")
-        # Optional: allow fast reuse via AUTOFORMAL_REUSE_INIT_EVAL=1.
+                                                                      
         for cand in [
             src_seed / "results" / "metrics.json",
             src_seed / "metrics.json",
@@ -208,7 +208,7 @@ def _run_one_problem(
         os.fspath(init_path),
         "--results_dir",
         os.fspath(run_root),
-        # Gen0-only: num_generations=1 triggers Gen0 then stops.
+                                                                
         "--num_generations",
         "1",
         "--max_llm_calls",
@@ -219,17 +219,17 @@ def _run_one_problem(
         str(int(seeds_per_problem)),
         "--max_repair_attempts_gen0",
         str(int(max_repair_attempts_gen0)),
-        # Prevent meta recommendation noise during seedbank generation.
+                                                                       
         "--meta_rec_interval",
         "0",
     ]
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    # Explicitly disable semantic/cycle scoring during seedbank build.
+                                                                      
     env["AUTOFORMAL_DISABLE_SEMANTIC"] = "1"
     env["CYCLE_API_BASE_URL"] = ""
-    # Optional repair override: keep generation model separate from repair model.
+                                                                                 
     if str(repair_openai_llm_base_url).strip() and str(repair_llm_models).strip():
         env["AUTOFORMAL_REPAIR_OPENAI_LLM_BASE_URL"] = str(repair_openai_llm_base_url).strip()
         env["AUTOFORMAL_REPAIR_LLM_MODELS"] = str(repair_llm_models).strip()

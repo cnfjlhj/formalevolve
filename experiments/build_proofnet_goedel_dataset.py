@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -44,7 +44,7 @@ def _normalize_statement_to_by_sorry(stmt: str) -> str:
     if ":=" in s:
         head = s.split(":=", 1)[0].rstrip()
         return head + " := by sorry"
-    # Fallback: keep original but ensure it ends with a proof stub.
+                                                                   
     if s.endswith("sorry"):
         s = s[: -len("sorry")].rstrip()
     return s.rstrip() + " := by sorry"
@@ -58,8 +58,8 @@ class Problem:
 
 
 def _problem_id_from_row(row: Dict[str, Any]) -> str:
-    # Prefer globally-unique identifiers to avoid merging different problems that
-    # share the same short "exercise_x_y" name across sources/books.
+                                                                                 
+                                                                    
     for k in ("full_name", "problem_name", "name", "id"):
         v = str(row.get(k) or "").strip()
         if v:

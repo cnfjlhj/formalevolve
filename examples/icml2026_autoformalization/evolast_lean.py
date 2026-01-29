@@ -23,9 +23,9 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
-# ----------------------------
-# Public configuration surface
-# ----------------------------
+                              
+                              
+                              
 
 RULE_KEYS = (
     "hyp_reorder",
@@ -95,9 +95,9 @@ def similarity_ratio(a: str, b: str) -> float:
     return float(SequenceMatcher(a=aa, b=bb).ratio())
 
 
-# -----------------
-# Lean code helpers
-# -----------------
+                   
+                   
+                   
 
 _DECL_RE = re.compile(r"(?m)^\s*(?:noncomputable\s+)?theorem\b")
 
@@ -133,18 +133,18 @@ def _theorem_parts(decl: str) -> Optional[Tuple[str, str, str]]:
     s = str(decl or "").strip()
     if not s:
         return None
-    # Find the `:` that starts the type at depth 0.
+                                                   
     colon_idx = _find_at_toplevel(s, ":")
     if colon_idx is None:
         return None
-    # Find the `:=` that starts the body at depth 0.
-    #
-    # IMPORTANT: Lean propositions may contain `let x := ...` inside the goal type,
-    # so there can be multiple top-level `:=` tokens between `:` and the theorem's
-    # actual `:= by ...` body delimiter. Picking the first would corrupt the decl:
-    #   `theorem t : let x := 1; P x := by ...`
-    # We locate the *theorem-body* `:=` by skipping `:=` that belong to `let` binders
-    # at the same delimiter depth (tracked with `;`).
+                                                    
+     
+                                                                                   
+                                                                                  
+                                                                                  
+                                               
+                                                                                     
+                                                     
     coloneq_idx = _find_theorem_body_coloneq(s, start=colon_idx + 1)
     if coloneq_idx is None or coloneq_idx <= colon_idx:
         return None
@@ -155,7 +155,7 @@ def _theorem_parts(decl: str) -> Optional[Tuple[str, str, str]]:
 
 
 def _is_ident_char(ch: str) -> bool:
-    # Lean identifiers allow letters/digits/underscore and primes.
+                                                                  
     return ch.isalnum() or ch in {"_", "'"}
 
 
@@ -181,8 +181,8 @@ def _find_theorem_body_coloneq(s: str, *, start: int) -> Optional[int]:
     in_string = False
     block_comment_depth = 0
 
-    # Track whether we are in the *binder* part of a `let` expression at depth 0:
-    # `let x := <binding>; <body>`
+                                                                                 
+                                  
     in_let_binding = False
 
     while i < len(s):
@@ -209,7 +209,7 @@ def _find_theorem_body_coloneq(s: str, *, start: int) -> Optional[int]:
             i += 1
             continue
 
-        # Comments / strings
+                            
         if s.startswith("/-", i):
             block_comment_depth = 1
             i += 2
@@ -225,7 +225,7 @@ def _find_theorem_body_coloneq(s: str, *, start: int) -> Optional[int]:
             i += 1
             continue
 
-        # Delimiter nesting
+                           
         ch = s[i]
         if ch in depths:
             depths[ch] += 1
@@ -242,7 +242,7 @@ def _find_theorem_body_coloneq(s: str, *, start: int) -> Optional[int]:
             i += 1
             continue
 
-        # Depth 0: handle `let` binders (only the binder assignment uses `:=`).
+                                                                               
         if _is_keyword_at(s, i, "let"):
             in_let_binding = True
             i += 3
@@ -253,7 +253,7 @@ def _find_theorem_body_coloneq(s: str, *, start: int) -> Optional[int]:
                 in_let_binding = False
                 i += 1
                 continue
-            # The binder assignment itself.
+                                           
             if s.startswith(":=", i):
                 i += 2
                 continue
@@ -310,7 +310,7 @@ def _find_all_at_toplevel(s: str, needle: str) -> List[int]:
             i += 1
             continue
 
-        # Comments / strings
+                            
         if s.startswith("/-", i):
             block_comment_depth = 1
             i += 2
@@ -326,7 +326,7 @@ def _find_all_at_toplevel(s: str, needle: str) -> List[int]:
             i += 1
             continue
 
-        # Delimiter nesting
+                           
         ch = s[i]
         if ch in depths:
             depths[ch] += 1
@@ -358,7 +358,7 @@ def _find_at_toplevel(s: str, needle: str) -> Optional[int]:
 def _extract_binders(head: str) -> Tuple[str, List[str]]:
     """Split `theorem name ...` head into (prefix, binder_groups)."""
     s = str(head or "").rstrip()
-    # Find first binder open at depth 0.
+                                        
     idx = None
     for j, ch in enumerate(s):
         if ch in "([{":
@@ -376,7 +376,7 @@ def _extract_binders(head: str) -> Tuple[str, List[str]]:
         if i >= len(rest):
             break
         if rest[i] not in "([{":
-            # Unusual binder surface form; stop and keep remaining as prefix tail.
+                                                                                  
             prefix = (prefix + " " + rest[i:]).strip()
             break
         open_ch = rest[i]
@@ -396,9 +396,9 @@ def _extract_binders(head: str) -> Tuple[str, List[str]]:
     return prefix, groups
 
 
-# ----------------------------
-# Expression parsing / printing
-# ----------------------------
+                              
+                               
+                              
 
 _MULTI_OPS = ("↔", "≤", "≥", "≠", ":=", "->", "→")
 _SINGLE_OP_CHARS = set("()[]{}:+*=/<>^¬∧∨")
@@ -426,10 +426,10 @@ def _tokenize(expr: str) -> List[str]:
             tokens.append(ch)
             i += 1
             continue
-        # Atom: read until whitespace or operator-ish char.
+                                                           
         j = i
         while j < len(s) and (not s[j].isspace()) and (s[j] not in _SINGLE_OP_CHARS):
-            # Stop before any multi-op.
+                                       
             if any(s.startswith(op, j) for op in _MULTI_OPS):
                 break
             j += 1
@@ -507,7 +507,7 @@ class _Parser:
             if prec < min_prec:
                 break
             self.i += 1
-            # Right-assoc for arrow and power; left-assoc otherwise.
+                                                                    
             next_min = prec + (0 if op in {"->", "→", "^"} else 1)
             rhs = self._parse_expr(next_min)
             node = Binary(op=op, left=node, right=rhs)
@@ -534,9 +534,9 @@ def _parse_expr(expr: str) -> Expr:
     try:
         parser = _Parser(toks)
         node = parser.parse()
-        # If we fail to consume all tokens, the grammar is outside our supported subset
-        # (e.g., `∀/∃` binders, commas, `:` binder syntax). In that case, fall back to a
-        # raw Atom to avoid truncating/changing the expression.
+                                                                                       
+                                                                                        
+                                                               
         if parser.i != len(toks):
             return Atom(str(expr).strip())
         return node
@@ -567,9 +567,9 @@ def _to_str(e: Expr, parent_prec: int = 0) -> str:
     return ""
 
 
-# ----------------------------
-# Rewrite rules (7-rule surface)
-# ----------------------------
+                              
+                                
+                              
 
 _COMM_OPS = {"+", "*", "∧", "∨"}
 _ASSOC_OPS = {"+", "*", "∧", "∨"}
@@ -594,7 +594,7 @@ def apply_evolast_to_lean_code(
     - `aggressive` enables the original rule-based mutation for the supported
       expression subset, with a strict fallback to raw text when parsing is partial.
     """
-    # Paper-aligned default: run EvolAST in aggressive rule-based mode unless explicitly set to `safe`.
+                                                                                                       
     mode_eff = str(
         (mode or os.environ.get("AUTOFORMAL_EVOLAST_MODE") or "aggressive")
     ).strip().lower()
@@ -673,7 +673,7 @@ def _rewrite_binders(
     counts = {k: 0 for k in RULE_KEYS}
 
     out = list(binders)
-    # Rule 1: hypothesis reordering (conservative adjacent swaps).
+                                                                  
     if out and rng.random() < float(p) and weights.get("hyp_reorder", 0.0) > 0.0:
         idxs = [i for i, b in enumerate(out) if _is_hypothesis_binder(b)]
         swaps = 0
@@ -691,7 +691,7 @@ def _rewrite_binders(
         if swaps > 0:
             counts["hyp_reorder"] += 1
 
-    # Apply expression rewrites inside each binder's type.
+                                                          
     rewritten = []
     for b in out:
         b2 = _rewrite_binder_type(b, p=p, weights=weights, rng=rng, counts=counts, max_rewrites=max_rewrites)
@@ -704,21 +704,21 @@ def _is_hypothesis_binder(b: str) -> bool:
     s = str(b or "").strip()
     if ":" not in s:
         return False
-    # Extract the binder name (best-effort).
+                                            
     m = re.match(r"^[({\[]\s*([A-Za-z_][A-Za-z0-9_']*)\b", s)
     name = (m.group(1) if m else "").strip()
     if name.lower().startswith(("h", "hyp", "assm")):
         return True
-    # Heuristic: logical/relation symbols suggest Prop-like binder.
+                                                                   
     return bool(re.search(r"(=|≠|<|>|≤|≥|∧|∨|↔|¬|→|->|∣)", s))
 
 
 def _binder_name_and_type(b: str) -> Tuple[str, str]:
     s = str(b or "").strip()
-    # Split at first ':' at top level inside this binder group.
-    # Binder groups are already balanced, so a simple split is OK. Be careful to
-    # strip ONLY the outermost binder delimiters; do NOT strip nested parentheses
-    # in the type, otherwise we may corrupt e.g. `Finset (EuclideanSpace ...))`.
+                                                               
+                                                                                
+                                                                                 
+                                                                                
     if not s or ":" not in s:
         return "", ""
 
@@ -735,7 +735,7 @@ def _binder_name_and_type(b: str) -> Tuple[str, str]:
         return "", ""
     left, right = inner.split(":", 1)
 
-    # left like "hn " or "x y "
+                               
     left = left.strip()
     name = left.split()[0] if left.split() else ""
     typ = right.strip()
@@ -747,7 +747,7 @@ def _safe_swap_binders(b1: str, b2: str) -> bool:
     n2, t2 = _binder_name_and_type(b2)
     if not n1 or not n2:
         return False
-    # Prevent swapping if either type mentions the other binder name.
+                                                                     
     if re.search(rf"\\b{re.escape(n1)}\\b", t2):
         return False
     if re.search(rf"\\b{re.escape(n2)}\\b", t1):
@@ -768,9 +768,9 @@ def _rewrite_binder_type(
     if ":" not in s:
         return b
 
-    # IMPORTANT: strip ONLY ONE outer delimiter pair. Using `lstrip`/`rstrip`
-    # is unsafe because it removes *all* matching characters, which can corrupt
-    # nested parentheses in types (a real bug observed in large runs).
+                                                                             
+                                                                               
+                                                                      
     open_ch = s[0] if (s and s[0] in "([{") else "("
     close_ch = {"(": ")", "[": "]", "{": "}"}.get(open_ch, ")")
     inner = s
@@ -786,7 +786,7 @@ def _rewrite_binder_type(
     typ = right.strip()
 
     info, typ2 = _rewrite_expr_text(typ, p=p, weights=weights, rng=rng, max_rewrites=max_rewrites)
-    # Accumulate counts (excluding hyp_reorder which is already handled).
+                                                                         
     for k, v in (info.get("counts") or {}).items():
         if k in counts and k != "hyp_reorder":
             counts[k] += int(v)
@@ -810,7 +810,7 @@ def _rewrite_expr_text(
         if remaining <= 0:
             return node
 
-        # Recurse first (top-down keeps changes coarse).
+                                                        
         if isinstance(node, Unary):
             node = Unary(node.op, go(node.arg))
         elif isinstance(node, Binary):
@@ -885,7 +885,7 @@ def _applicable_rules(node: Expr) -> List[str]:
             and node.right.op in {"+", "∨"}
         ):
             out.append("distributivity")
-        # Factoring form: (a*b + a*c) -> a*(b+c); ((A∧B) ∨ (A∧C)) -> A∧(B∨C)
+                                                                            
         if node.op in {"+", "∨"}:
             out.append("distributivity")
         if node.op in _SYM_REL_OPS:
@@ -894,7 +894,7 @@ def _applicable_rules(node: Expr) -> List[str]:
             out.append("dual_relation")
     if isinstance(node, Unary) and node.op == "¬" and isinstance(node.arg, Binary) and node.arg.op in {"∧", "∨"}:
         out.append("de_morgan")
-    # Reverse De Morgan: (¬A ∨ ¬B) -> ¬(A ∧ B); (¬A ∧ ¬B) -> ¬(A ∨ B)
+                                                                     
     if isinstance(node, Binary) and node.op in {"∨", "∧"}:
         if isinstance(node.left, Unary) and node.left.op == "¬" and isinstance(node.right, Unary) and node.right.op == "¬":
             out.append("de_morgan")
@@ -909,15 +909,15 @@ def _apply_rule(node: Expr, rule: str, rng: random.Random) -> Expr:
     if rule == "dual_relation" and isinstance(node, Binary) and node.op in _DUAL_REL:
         return Binary(_DUAL_REL[node.op], node.right, node.left)
     if rule == "associativity" and isinstance(node, Binary) and node.op in _ASSOC_OPS:
-        # ((a op b) op c) <-> (a op (b op c))
+                                             
         if isinstance(node.left, Binary) and node.left.op == node.op:
-            # (a op b) op c -> a op (b op c)
+                                            
             a = node.left.left
             b = node.left.right
             c = node.right
             return Binary(node.op, a, Binary(node.op, b, c))
         if isinstance(node.right, Binary) and node.right.op == node.op:
-            # a op (b op c) -> (a op b) op c
+                                            
             a = node.left
             b = node.right.left
             c = node.right.right
@@ -946,9 +946,9 @@ def _apply_rule(node: Expr, rule: str, rng: random.Random) -> Expr:
             return Unary("¬", Binary("∧", a, b))
         return Unary("¬", Binary("∨", a, b))
     if rule == "distributivity" and isinstance(node, Binary):
-        # Arithmetic: a*(b+c) -> a*b + a*c ; (a+b)*c -> a*c + b*c
-        # Logic: A ∧ (B ∨ C) -> (A ∧ B) ∨ (A ∧ C) ; (A ∨ B) ∧ C -> (A ∧ C) ∨ (B ∧ C)
-        # Factoring (reverse distributivity) for both domains.
+                                                                 
+                                                                                    
+                                                              
         if node.op == "*" and isinstance(node.right, Binary) and node.right.op == "+":
             a = node.left
             b = node.right.left
@@ -972,7 +972,7 @@ def _apply_rule(node: Expr, rule: str, rng: random.Random) -> Expr:
         if node.op == "+" and isinstance(node.left, Binary) and node.left.op == "*" and isinstance(node.right, Binary) and node.right.op == "*":
             l1, l2 = node.left.left, node.left.right
             r1, r2 = node.right.left, node.right.right
-            # Try factor on left side: (a*b + a*c) -> a*(b+c)
+                                                             
             if l1 == r1:
                 return Binary("*", l1, Binary("+", l2, r2))
             if l1 == r2:
@@ -985,7 +985,7 @@ def _apply_rule(node: Expr, rule: str, rng: random.Random) -> Expr:
         if node.op == "∨" and isinstance(node.left, Binary) and node.left.op == "∧" and isinstance(node.right, Binary) and node.right.op == "∧":
             l1, l2 = node.left.left, node.left.right
             r1, r2 = node.right.left, node.right.right
-            # (A∧B) ∨ (A∧C) -> A ∧ (B ∨ C)
+                                          
             if l1 == r1:
                 return Binary("∧", l1, Binary("∨", l2, r2))
             if l1 == r2:

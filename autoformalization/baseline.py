@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
-# Add project paths
+                   
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
@@ -35,9 +35,9 @@ from .critic_wrapper import close_session
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# LLM Call Counter (unified budget tracking)
-# ============================================================================
+                                                                              
+                                            
+                                                                              
 
 _llm_call_count = 0
 
@@ -70,9 +70,9 @@ def increment_llm_call_count():
     _llm_call_count += 1
 
 
-# ============================================================================
-# Data Loading
-# ============================================================================
+                                                                              
+              
+                                                                              
 
 def load_problems(
     dataset_name: str,
@@ -93,9 +93,9 @@ def load_problems(
     return problems
 
 
-# ============================================================================
-# LLM Generation
-# ============================================================================
+                                                                              
+                
+                                                                              
 
 def query_llm(prompt: str, config: Config) -> str:
     """Query LLM for code generation."""
@@ -178,7 +178,7 @@ def _format_parent_summary(p: Candidate, idx: int, lambda_beq: float) -> str:
     2. Semantic outcome is explicit: CORRECT vs INCORRECT vs N/A
     3. Provide strengths and weaknesses to help the LLM perform crossover
     """
-    # Status tags
+                 
     if p.compile_ok:
         compile_status = "COMPILED"
         semantic_status = "CORRECT" if p.s_sem == 1 else "INCORRECT"
@@ -190,7 +190,7 @@ def _format_parent_summary(p: Candidate, idx: int, lambda_beq: float) -> str:
 
     reward = p.reward(lambda_beq)
 
-    # Header line
+                 
     header_line = (
         f"[Parent {idx}] "
         f"Syntax: {compile_status} | "
@@ -199,17 +199,17 @@ def _format_parent_summary(p: Candidate, idx: int, lambda_beq: float) -> str:
         f"Reward: {reward:.2f}"
     )
 
-    # Code block
+                
     code_block = f"```lean\n{p.code.strip()}\n```"
 
-    # Error/feedback section
+                            
     feedback_section = ""
     if not p.compile_ok and p.compile_error:
         feedback_section = f"\nCompilation Error:\n{_truncate(p.compile_error, 300)}"
     elif p.compile_ok and p.s_sem == 0 and p.critic_raw:
         feedback_section = f"\nSemantic Issue:\n{_truncate(p.critic_raw, 300)}"
 
-    # Strength/weakness analysis (to help the LLM use this parent effectively)
+                                                                              
     strengths = []
     weaknesses = []
 
@@ -268,9 +268,9 @@ def generate_evolved_candidate(
     )
 
 
-# ============================================================================
-# Archive Management
-# ============================================================================
+                                                                              
+                    
+                                                                              
 
 @dataclass
 class Archive:
@@ -279,12 +279,12 @@ class Archive:
     max_size: int = 100
     lambda_beq: float = 0.5
 
-    # Maintain usage counters inside the archive (keeps models.py clean).
+                                                                         
     usage_map: Dict[str, int] = field(default_factory=dict)
 
     def add(self, candidate: Candidate):
         """Add candidate to archive."""
-        # Exact-match deduplication (duplicates are wasted budget under small budgets).
+                                                                                       
         existing = {c.code.strip() for c in self.candidates}
         if candidate.code.strip() in existing:
             return
@@ -293,7 +293,7 @@ class Archive:
         self.candidates.sort(key=lambda c: c.reward(self.lambda_beq), reverse=True)
         self.candidates = self.candidates[:self.max_size]
 
-        # Initialize usage for new candidates.
+                                              
         if candidate.candidate_id not in self.usage_map:
             self.usage_map[candidate.candidate_id] = 0
 
@@ -317,17 +317,17 @@ class Archive:
             valid = self.candidates
         return valid[:k]
 
-    # Previous version: pure top-k greedy sampling can cause parent collapse.
-    # def sample_parents(self, k: int) -> List[Candidate]:
-    #     """Sample k parents for evolution."""
-    #     compiled = [c for c in self.candidates if c.compile_ok]
-    #     if len(compiled) >= k:
-    #         # Select top-k by reward
-    #         return sorted(compiled, key=lambda c: c.reward(self.lambda_beq), reverse=True)[:k]
-    #     # If not enough compiled, include non-compiled
-    #     return self.candidates[:k]
+                                                                             
+                                                          
+                                               
+                                                                 
+                                
+                                      
+                                                                                                
+                                                        
+                                    
 
-    # Evolution v2 sampling (non-greedy + usage penalty + enforced diversity).
+                                                                              
     def sample_two_parents_v2(
         self,
         top_k: int = 10,
@@ -343,64 +343,64 @@ class Archive:
 
         compiled = [c for c in self.candidates if c.compile_ok]
         if not compiled:
-            # No compiled candidates: return empty so the caller can skip/fallback.
+                                                                                   
             return []
 
         if len(compiled) == 1:
-            # Only one parent available: caller may fall back to rewrite.
+                                                                         
             return [compiled[0]]
 
-        # Candidates are already sorted by reward, but we still take an explicit top list.
+                                                                                          
         top = compiled[: min(top_k, len(compiled))]
 
-        # Normalize rewards to avoid scale issues.
+                                                  
         rewards = [c.reward(self.lambda_beq) for c in top]
         max_r = max(rewards) if rewards else 0.0
         norm_rewards = [r / max_r if max_r > 0 else 0.0 for r in rewards]
 
-        # Sampling weights: higher reward => more likely; higher usage => more penalized.
+                                                                                         
         weights = []
         for c, r in zip(top, norm_rewards):
             u = self.usage_map.get(c.candidate_id, 0)
             w = math.exp(alpha * r) * math.exp(-beta * u)
             weights.append(w)
 
-        # Guard numerical issues.
+                                 
         total_w = sum(weights)
         if total_w <= 0:
             probs = [1.0 / len(top)] * len(top)
         else:
             probs = [w / total_w for w in weights]
 
-        # Sample parent1 by weight.
+                                   
         idx1 = random.choices(range(len(top)), weights=probs, k=1)[0]
         p1 = top[idx1]
 
-        # parent2: two-level fallback (exploration ≠ injecting junk into crossover)
-        # Prefer compiled candidates with reward > 0 (at least semantically correct).
+                                                                                   
+                                                                                     
         pool2 = [
             c for c in compiled
             if c.candidate_id != p1.candidate_id and c.reward(self.lambda_beq) > 0
         ]
-        # If too few, fall back to all compiled.
+                                                
         if not pool2:
             pool2 = [c for c in compiled if c.candidate_id != p1.candidate_id]
         if not pool2:
-            # Extreme guard: if pool2 is empty, return a single parent.
+                                                                       
             return [p1]
 
         p2 = random.choice(pool2)
 
-        # Update usage counts.
+                              
         self.usage_map[p1.candidate_id] = self.usage_map.get(p1.candidate_id, 0) + 1
         self.usage_map[p2.candidate_id] = self.usage_map.get(p2.candidate_id, 0) + 1
 
         return [p1, p2]
 
 
-# ============================================================================
-# Method 1: Naive Best-of-N Sampling
-# ============================================================================
+                                                                              
+                                    
+                                                                              
 
 async def run_naive(problem: Problem, config: Config) -> Candidate:
     """
@@ -420,11 +420,11 @@ async def run_naive(problem: Problem, config: Config) -> Candidate:
         )
         candidates.append(cand)
 
-    # Evaluate all
+                  
     logger.info(f"  Evaluating {len(candidates)} candidates...")
     evaluated = await batch_evaluate(candidates, problem, config)
 
-    # Select best
+                 
     archive = Archive(lambda_beq=config.lambda_beq)
     archive.add_all(evaluated)
 
@@ -436,9 +436,9 @@ async def run_naive(problem: Problem, config: Config) -> Candidate:
     return best
 
 
-# ============================================================================
-# Method 2: Rewrite-only (Single Chain Self-Refine)
-# ============================================================================
+                                                                              
+                                                   
+                                                                              
 
 async def run_rewrite(problem: Problem, config: Config) -> Candidate:
     """
@@ -452,7 +452,7 @@ async def run_rewrite(problem: Problem, config: Config) -> Candidate:
 
     archive = Archive(lambda_beq=config.lambda_beq)
 
-    # Initial generation
+                        
     init_candidates = []
     for i in range(config.rewrite_init):
         logger.info(f"  Initial candidate {i+1}/{config.rewrite_init}")
@@ -463,15 +463,15 @@ async def run_rewrite(problem: Problem, config: Config) -> Candidate:
         )
         init_candidates.append(cand)
 
-    # Evaluate initial
+                      
     evaluated = await batch_evaluate(init_candidates, problem, config)
     archive.add_all(evaluated)
 
-    # Rewrite rounds
+                    
     for round_num in range(1, config.rewrite_rounds + 1):
         logger.info(f"  Round {round_num}/{config.rewrite_rounds}")
 
-        # Select best parent for rewrite
+                                        
         best = archive.get_best()
         if best is None:
             best = archive.candidates[0] if archive.candidates else None
@@ -480,10 +480,10 @@ async def run_rewrite(problem: Problem, config: Config) -> Candidate:
             logger.warning("  No candidates available, skipping round")
             continue
 
-        # Avoid feeding full logs/CoT into prompts (prompt bloat + noise-as-signal)
+                                                                                   
         MAX_FB_CHARS = 300
 
-        # Generate feedback
+                           
         if not best.compile_ok and best.compile_error:
             feedback = (
                 "Lean compilation failed:\n"
@@ -499,7 +499,7 @@ async def run_rewrite(problem: Problem, config: Config) -> Candidate:
         else:
             feedback = "Please improve the formalization to better match the mathematical statement."
 
-        # Generate rewrites
+                           
         new_candidates = []
         for i in range(config.rewrite_per_round):
             logger.info(f"    Rewrite {i+1}/{config.rewrite_per_round}")
@@ -512,7 +512,7 @@ async def run_rewrite(problem: Problem, config: Config) -> Candidate:
             )
             new_candidates.append(cand)
 
-        # Evaluate
+                  
         evaluated = await batch_evaluate(new_candidates, problem, config)
         archive.add_all(evaluated)
 
@@ -524,9 +524,9 @@ async def run_rewrite(problem: Problem, config: Config) -> Candidate:
     return best
 
 
-# ============================================================================
-# Method 3: Population Evolution (Shinka-style)
-# ============================================================================
+                                                                              
+                                               
+                                                                              
 
 async def run_evolution(problem: Problem, config: Config) -> Candidate:
     """
@@ -540,7 +540,7 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
 
     archive = Archive(lambda_beq=config.lambda_beq)
 
-    # Initial generation
+                        
     init_candidates = []
     for i in range(config.evolve_init):
         logger.info(f"  Initial candidate {i+1}/{config.evolve_init}")
@@ -551,31 +551,31 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
         )
         init_candidates.append(cand)
 
-    # Evaluate initial
+                      
     evaluated = await batch_evaluate(init_candidates, problem, config)
     archive.add_all(evaluated)
 
-    # Track parent pairing diversity (helps verify evolution behavior).
+                                                                       
     parent_pairs = set()
-    parent_pair_counter = Counter()  # number of times each pair is sampled
+    parent_pair_counter = Counter()                                        
 
-    # Evolution rounds
+                      
     for round_num in range(1, config.evolve_rounds + 1):
         logger.info(f"  Round {round_num}/{config.evolve_rounds}")
 
-        # Previous version: sample parents once per round + alternating rewrite/crossover => degraded.
-        # num_parents = min(2, len(archive.candidates))
-        # parents = archive.sample_parents(num_parents)
-        # if not parents:
-        #     logger.warning("  No parents available, skipping round")
-        #     continue
+                                                                                                      
+                                                       
+                                                       
+                         
+                                                                      
+                      
 
-        # Current version: re-sample parents for each offspring (avoids collapse).
+                                                                                  
         new_candidates = []
         for i in range(config.evolve_offspring):
             logger.info(f"    Offspring {i+1}/{config.evolve_offspring}")
 
-            # Re-sample parents for each offspring.
+                                                   
             parents = archive.sample_two_parents_v2(
                 top_k=10,
                 alpha=3.0,
@@ -587,7 +587,7 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
                 continue
 
             if len(parents) == 1:
-                # Only one parent: fall back to rewrite (the only allowed degeneration case).
+                                                                                             
                 parent = parents[0]
                 MAX_FB_CHARS = 300
                 if not parent.compile_ok and parent.compile_error:
@@ -611,8 +611,8 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
                     feedback=feedback
                 )
             else:
-                # Normal case: multi-parent crossover (EVOLUTION_PROMPT).
-                # Record the parent pair (for diversity audits).
+                                                                         
+                                                                
                 pair = tuple(sorted(p.candidate_id for p in parents))
                 parent_pairs.add(pair)
                 parent_pair_counter[pair] += 1
@@ -626,13 +626,13 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
 
             new_candidates.append(cand)
 
-        # Evaluate (defensive empty-list check).
+                                                
         if new_candidates:
             evaluated = await batch_evaluate(new_candidates, problem, config)
             archive.add_all(evaluated)
 
-            # --- Round sanity stats (cheap but very informative) ---
-            # compile_ok count, reward>0 count, beq=1 count
+                                                                     
+                                                           
             c_compile = sum(1 for c in evaluated if c.compile_ok)
             c_reward_pos = sum(1 for c in evaluated if c.reward(config.lambda_beq) > 0)
             c_beq = sum(1 for c in evaluated if (c.compile_ok and c.beq_flag == 1))
@@ -643,7 +643,7 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
         else:
             logger.warning(f"  Round {round_num}: no offspring generated, skipping evaluation")
 
-        # Log parent pairing diversity
+                                      
         top_pairs = parent_pair_counter.most_common(3)
         logger.info(
             f"  Round {round_num}: unique_pairs={len(parent_pairs)}, "
@@ -658,9 +658,9 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
     return best
 
 
-# ============================================================================
-# Main Experiment Runner
-# ============================================================================
+                                                                              
+                        
+                                                                              
 
 async def run_experiment(config: Config):
     """Run full experiment comparing all three methods."""
@@ -697,11 +697,11 @@ async def run_experiment(config: Config):
                 "nl_statement": problem.nl_statement,
             }
 
-            # Method 1: Naive
+                             
             reset_llm_call_count()
             naive_best = await run_naive(problem, config)
             naive_calls = get_llm_call_count()
-            # Budget sanity check
+                                 
             assert naive_calls == config.naive_n, f"Naive budget violated: {naive_calls} != {config.naive_n}"
 
             if naive_best:
@@ -716,11 +716,11 @@ async def run_experiment(config: Config):
                     "naive_llm_calls": naive_calls,
                 })
 
-            # Method 2: Rewrite-only
+                                    
             reset_llm_call_count()
             rewrite_best = await run_rewrite(problem, config)
             rewrite_calls = get_llm_call_count()
-            # Budget sanity check
+                                 
             expected_rewrite = config.rewrite_init + config.rewrite_rounds * config.rewrite_per_round
             assert rewrite_calls == expected_rewrite, f"Rewrite budget violated: {rewrite_calls} != {expected_rewrite}"
 
@@ -736,11 +736,11 @@ async def run_experiment(config: Config):
                     "rewrite_llm_calls": rewrite_calls,
                 })
 
-            # Method 3: Evolution
+                                 
             reset_llm_call_count()
             evolve_best = await run_evolution(problem, config)
             evolve_calls = get_llm_call_count()
-            # Budget sanity check
+                                 
             expected_evolve = config.evolve_init + config.evolve_rounds * config.evolve_offspring
             assert evolve_calls == expected_evolve, f"Evolution budget violated: {evolve_calls} != {expected_evolve}"
 
@@ -758,7 +758,7 @@ async def run_experiment(config: Config):
 
             all_results.append(problem_results)
 
-            # Save individual problem results
+                                             
             problem_dir = results_dir / problem.id.replace("|", "_").replace("/", "_")
             problem_dir.mkdir(exist_ok=True)
 
@@ -775,7 +775,7 @@ async def run_experiment(config: Config):
                 with open(problem_dir / "evolve_best.lean", "w") as f:
                     f.write(evolve_best.full_code)
 
-            # Log progress
+                          
             logger.info(f"\nProblem {problem.id} Summary:")
             logger.info(f"  Naive:    soft={problem_results.get('naive_soft_success', False)}, "
                        f"strict={problem_results.get('naive_strict_success', False)}, "
@@ -790,16 +790,16 @@ async def run_experiment(config: Config):
     finally:
         await close_session()
 
-    # Save aggregate results
+                            
     with open(results_dir / "all_results.json", "w") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
 
-    # Generate summary
+                      
     summary = generate_summary(all_results, config)
     with open(results_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
-    # Print summary
+                   
     print_summary(summary)
 
     return all_results, summary
@@ -870,9 +870,9 @@ def print_summary(summary: Dict):
         logger.info(f"  Mean LLM calls:     {m['mean_llm_calls']:.1f}")
 
 
-# ============================================================================
-# Entry Point
-# ============================================================================
+                                                                              
+             
+                                                                              
 
 if __name__ == "__main__":
     logging.basicConfig(

@@ -23,16 +23,16 @@ def plot_embed_similarity(
     if ordered:
         from scipy.cluster.hierarchy import linkage, leaves_list
 
-        # Perform hierarchical clustering
+                                         
         linkage_matrix = linkage(embeds, method="ward")
         ordered_indices = leaves_list(linkage_matrix)
 
-        # Reorder matrix
+                        
         similarity_matrix = similarity_matrix[ordered_indices][:, ordered_indices]
         perfs = perfs[ordered_indices]
         title += " (Clustered)"
 
-    # Plot similarity matrix
+                            
     fig, axs = plt.subplots(
         1, 2, figsize=(12, 8), gridspec_kw={"width_ratios": [20, 1]}
     )
@@ -42,13 +42,13 @@ def plot_embed_similarity(
     axs[0].set_ylabel("Program Index")
 
     if ordered:
-        # set xticks to be the program ids using ordered_indices
+                                                                
         axs[0].set_xticks(np.arange(len(ordered_indices))[::3])
         axs[0].set_xticklabels(ordered_indices[::3])
         axs[0].set_yticks(np.arange(len(ordered_indices))[::3])
         axs[0].set_yticklabels(ordered_indices[::3])
 
-    # Plot performance heatmap
+                              
     sns.heatmap(
         perfs.reshape(-1, 1),
         cmap="Reds_r",

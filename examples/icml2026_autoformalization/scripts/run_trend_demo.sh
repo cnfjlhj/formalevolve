@@ -1,24 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Trend-level reproduction script.
-#
-# This script runs the same dataset slice twice (e.g., ours vs batchN),
-# then computes strict summaries from the SQLite DB and prints a short diff.
-#
-# Usage:
-#   ./run_trend_demo.sh proofnet_test 10 100
-#
-# Notes:
-# - For real LLM runs:
-#   - Set OPENAI_API_KEY (OpenAI official), OR
-#   - Set OPENAI_LLM_BASE_URL + AUTOFORMAL_LLM_MODELS (OpenAI-compatible local server).
-# - Semantic judging is enabled via `--use_semantic` and requires CriticLean:
-#     CRITIC_LEAN_BASE_URL=http://...  (or CRITIC_LEAN_URL=http://.../v1/chat/completions)
-#     CRITIC_LEAN_MODEL=<model_id>     (auto-detected if the server hosts a single model)
-# - Other optional services (e.g. cycle-consistency) are disabled by default.
-# - Semantic judging / cycle-consistency are controlled via flags passed through
-#   `run_dataset_pilot.py` (which writes per-problem problem_config.json).
 
 DATASET="${1:-proofnet_test}"
 NUM_PROBLEMS="${2:-10}"

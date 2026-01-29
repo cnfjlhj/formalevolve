@@ -171,7 +171,7 @@ def run_shinka_eval(
         }
         if validate_fn:
             metrics.setdefault("num_valid_runs", 0)
-            # Best guess for invalid runs if an exception occurs mid-evaluation
+                                                                               
             num_potential_runs = num_runs
             if all_run_results is not None:
                 num_potential_runs = len(all_run_results)

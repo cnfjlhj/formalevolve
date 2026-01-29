@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -229,8 +229,8 @@ def _binom_cdf(k: int, n: int, p: float) -> float:
 def mcnemar_exact_p(a_hits: List[int], b_hits: List[int]) -> Tuple[int, int, float]:
     if len(a_hits) != len(b_hits):
         raise ValueError("mcnemar: length mismatch")
-    n10 = 0  # a=1, b=0
-    n01 = 0  # a=0, b=1
+    n10 = 0            
+    n01 = 0            
     for a, b in zip(a_hits, b_hits):
         if a == 1 and b == 0:
             n10 += 1
@@ -272,7 +272,7 @@ def paired_permutation_p_mean(
     n = len(diffs)
     obs = sum(diffs) / float(n)
     obs_abs = abs(obs)
-    ge = 1  # add-one smoothing
+    ge = 1                     
     tot = 1
     for _ in range(int(n_perm)):
         s = 0.0
@@ -321,11 +321,11 @@ def compare_runs(
         "semantic_density": [float(x - y) for x, y in zip(a_s_den, b_s_den)],
     }
 
-    # Hit: McNemar exact.
+                         
     c_n10, c_n01, c_p = mcnemar_exact_p(a_c_hit, b_c_hit)
     s_n10, s_n01, s_p = mcnemar_exact_p(a_s_hit, b_s_hit)
 
-    # Density: paired permutation + bootstrap CI for mean diff.
+                                                               
     c_den_mean = sum(diffs["compile_density"]) / float(len(common))
     s_den_mean = sum(diffs["semantic_density"]) / float(len(common))
     c_den_ci = bootstrap_ci_mean_diff(diffs["compile_density"], n_boot=n_boot, seed=seed)

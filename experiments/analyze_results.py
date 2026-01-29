@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -242,8 +242,8 @@ def analyze_run_root(run_root: Path) -> Dict[str, Any]:
     manifest = _read_json(run_root / "manifest.json") or {}
     baselines = manifest.get("baselines")
     if not isinstance(baselines, list) or not baselines:
-        # Fallback for non-baseline manifests (e.g., evolve-only runs) or legacy
-        # manifests that didn't record `baselines`: infer from `runs/` folder names.
+                                                                                
+                                                                                    
         runs_dir = run_root / "runs"
         if runs_dir.is_dir():
             baselines = sorted([p.name for p in runs_dir.iterdir() if p.is_dir()])
@@ -337,9 +337,9 @@ def analyze_run_root(run_root: Path) -> Dict[str, Any]:
             row[f"{b}_semantic_dupmax_sig"] = int(s_div.dupmax_sig)
             row[f"{b}_semantic_top_sig"] = {"count": s_top.count, "sig": s_top.sig} if s_top else None
 
-            # Best program for per-problem case study. IMPORTANT:
-            # - Includes semantic repair outputs, because they are recorded as
-            #   separate programs in evolution_db.sqlite (same table).
+                                                                 
+                                                                              
+                                                                      
             best_prog: Optional[ProgramRow] = None
             if programs_rows:
                 best_prog = max(
@@ -525,8 +525,8 @@ def write_report(outputs: Dict[str, Any], out_dir: Path) -> None:
     (out_dir / "analysis_report.json").write_text(
         json.dumps(outputs, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    # Optional: per-problem best-case table for quick case study.
-    # `case_table` lives under each run report entry.
+                                                                 
+                                                     
     runs = outputs.get("runs")
     if isinstance(runs, list) and len(runs) == 1:
         case_table = (runs[0] or {}).get("case_table")

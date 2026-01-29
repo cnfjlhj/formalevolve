@@ -21,7 +21,7 @@ def load_hydra_config(
         if os.path.isfile(config_file):
             return OmegaConf.load(config_file)
         return None
-    # stop if no remaining depth
+                                
     if max_parent_depth <= 0:
         return None
     parent = os.path.dirname(output_dir)
@@ -117,7 +117,7 @@ def add_evolve_markers(
             raise IndexError("insert_* out of range (0-based).")
         if idx_end < idx_start:
             raise ValueError("insert_end must be ≥ insert_start.")
-    else:  # treat supplied ints as 1-based
+    else:                                  
         if not (1 <= idx_start <= n and 1 <= idx_end <= n):
             raise IndexError("insert_* out of range (1-based).")
         if idx_end < idx_start:
@@ -202,7 +202,7 @@ def get_line(
             f"No function or class named '{fn_or_class_name}' found in {path}"
         )
 
-    # AST line numbers are 1-based; convert to 0-based indices.
+                                                               
     before_idx = max(target_node.lineno - 2, 0)
     after_idx = target_node.end_lineno
 

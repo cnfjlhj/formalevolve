@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -266,7 +266,7 @@ def main() -> int:
         results: List[CmdResult] = []
 
         if run_baselines:
-            # sample
+                    
             sample_root = out_base / "sample100" / f"{tag}_{ts}__combibench__n{args.num_problems}__calls{args.budget_calls}__seed{args.seed}__conc{conc}"
             cmd = _build_baseline_cmd(
                 launcher=baseline_launcher,
@@ -289,7 +289,7 @@ def main() -> int:
             if not args.no_analyze:
                 _maybe_analyze(sample_root)
 
-            # strong_compile
+                            
             sc_root = out_base / "compile_repair100" / f"{tag}_{ts}__combibench__n{args.num_problems}__calls{args.budget_calls}__seed{args.seed}__conc{conc}"
             cmd = _build_baseline_cmd(
                 launcher=baseline_launcher,
@@ -312,7 +312,7 @@ def main() -> int:
             if not args.no_analyze:
                 _maybe_analyze(sc_root)
 
-            # strong_semantic
+                             
             ss_root = out_base / "semantic_repair100" / f"{tag}_{ts}__combibench__n{args.num_problems}__calls{args.budget_calls}__seed{args.seed}__conc{conc}"
             cmd = _build_baseline_cmd(
                 launcher=baseline_launcher,
@@ -378,13 +378,13 @@ def main() -> int:
         bad = [r for r in results if r.returncode != 0]
         return 0 if not bad else 1
 
-    # Sweep mode: run only evolution by default.
+                                                
     concs = _parse_int_list(args.concurrency_list)
     if not concs:
         print("[ERROR] empty --concurrency_list", file=sys.stderr)
         return 2
 
-    # In sweep mode, default to evolution-only unless explicitly requested otherwise.
+                                                                                     
     if not args.run_baselines and not args.run_evolution:
         run_evolution = True
         run_baselines = False
@@ -392,8 +392,8 @@ def main() -> int:
     sweep_tag = str(args.tag).strip() or "sweep"
     sweep_base = out_base / "_concurrency_sweep" / f"{sweep_tag}_{_ts()}__n{args.num_problems}__calls{args.budget_calls}__seed{args.seed}"
     sweep_base.mkdir(parents=True, exist_ok=True)
-    # In sweep mode, isolate outputs under the sweep directory to avoid mixing
-    # with the main experiment tree.
+                                                                              
+                                    
     out_base = sweep_base
     print(f"[sweep] out_base={out_base}")
 

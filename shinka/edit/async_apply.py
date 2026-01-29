@@ -44,14 +44,14 @@ async def apply_patch_async(
     loop = asyncio.get_event_loop()
 
     try:
-        # Create patch directory synchronously to avoid race conditions
+                                                                       
         try:
             Path(patch_dir).mkdir(parents=True, exist_ok=True)
         except FileExistsError:
-            # Another task already created it, which is fine
+                                                            
             pass
 
-        # Choose the appropriate patch function
+                                               
         if patch_type in ["full", "cross"]:
             patch_func = apply_full_patch
         elif patch_type == "diff":
@@ -59,7 +59,7 @@ async def apply_patch_async(
         else:
             raise ValueError(f"Unknown patch type: {patch_type}")
 
-        # Run patch application in thread pool to avoid blocking
+                                                                
         result = await loop.run_in_executor(
             None,
             lambda: patch_func(
@@ -93,7 +93,7 @@ async def validate_code_async(
     """
     try:
         if language == "python":
-            # Use python -m py_compile for syntax checking
+                                                          
             proc = await asyncio.create_subprocess_exec(
                 "python",
                 "-m",
@@ -119,7 +119,7 @@ async def validate_code_async(
                 return False, error_msg
 
         elif language == "rust":
-            # Use rustc for Rust syntax checking
+                                                
             proc = await asyncio.create_subprocess_exec(
                 "rustc",
                 "--crate-type=lib",
@@ -144,7 +144,7 @@ async def validate_code_async(
                 error_msg = stderr.decode() if stderr else "Unknown compilation error"
                 return False, error_msg
         elif language == "cpp":
-            # Use g++ for C++ compilation check
+                                               
             proc = await asyncio.create_subprocess_exec(
                 "g++",
                 "-fsyntax-only",
@@ -168,7 +168,7 @@ async def validate_code_async(
                 error_msg = stderr.decode() if stderr else "Unknown compilation error"
                 return False, error_msg
         elif language == "swift":
-            # Use swiftc for Swift syntax checking
+                                                  
             proc = await asyncio.create_subprocess_exec(
                 "swiftc",
                 "-typecheck",
@@ -193,7 +193,7 @@ async def validate_code_async(
                 error_msg = stderr.decode() if stderr else "Unknown compilation error"
                 return False, error_msg
         else:
-            # For other languages, just check if file exists and is readable
+                                                                            
             try:
                 async with aiofiles.open(code_path, "r") as f:
                     content = await f.read()
@@ -220,18 +220,18 @@ async def write_file_async(file_path: str, content: str) -> bool:
         True if successful, False otherwise
     """
     try:
-        # Ensure parent directory exists
+                                        
         parent_dir = Path(file_path).parent
         await asyncio.get_event_loop().run_in_executor(
             None, lambda: parent_dir.mkdir(parents=True, exist_ok=True)
         )
 
         if aiofiles:
-            # Use aiofiles if available
+                                       
             async with aiofiles.open(file_path, "w") as f:
                 await f.write(content)
         else:
-            # Fall back to sync I/O in thread pool
+                                                  
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None, lambda: Path(file_path).write_text(content)
@@ -255,11 +255,11 @@ async def read_file_async(file_path: str) -> Optional[str]:
     """
     try:
         if aiofiles:
-            # Use aiofiles if available
+                                       
             async with aiofiles.open(file_path, "r") as f:
                 content = await f.read()
         else:
-            # Fall back to sync I/O in thread pool
+                                                  
             loop = asyncio.get_event_loop()
             content = await loop.run_in_executor(
                 None, lambda: Path(file_path).read_text()
@@ -282,12 +282,12 @@ async def copy_file_async(src_path: str, dst_path: str) -> bool:
         True if successful, False otherwise
     """
     try:
-        # Read source file
+                          
         content = await read_file_async(src_path)
         if content is None:
             return False
 
-        # Write to destination
+                              
         return await write_file_async(dst_path, content)
 
     except Exception as e:
@@ -309,23 +309,23 @@ async def get_code_embedding_async(
         Tuple of (embedding_vector, cost)
     """
     try:
-        # Read code file asynchronously
+                                       
         code_content = await read_file_async(exec_fname)
         if not code_content:
             return None, 0.0
 
-        # Truncate if too long
+                              
         if len(code_content) > max_chars:
             code_content = code_content[:max_chars]
 
-        # Generate embedding in thread pool
+                                           
         loop = asyncio.get_event_loop()
 
         if hasattr(embedding_client, "embed_async"):
-            # Use async embedding if available
+                                              
             embedding, cost = await embedding_client.embed_async(code_content)
         else:
-            # Fall back to sync embedding in thread pool
+                                                        
             embedding, cost = await loop.run_in_executor(
                 None, embedding_client.get_embedding, code_content
             )

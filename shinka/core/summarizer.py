@@ -32,16 +32,16 @@ class MetaSummarizer:
         self.use_text_feedback = use_text_feedback
         self.max_recommendations = max_recommendations
 
-        # Meta state
+                    
         self.meta_summary = None
-        self.meta_scratch_pad = None  # New: Global insights scratchpad
+        self.meta_scratch_pad = None                                   
         self.meta_recommendations = None
         self.meta_recommendations_history = []
 
-        # Track programs evaluated since last meta query for persistent memory
+                                                                              
         self.evaluated_since_last_meta: List[Program] = []
 
-        # Track the accumulated count of programs processed in meta updates
+                                                                           
         self.total_programs_processed = 0
 
     def add_evaluated_program(self, program: Program) -> None:
@@ -51,8 +51,8 @@ class MetaSummarizer:
             f"correct={program.correct}"
         )
 
-        # Track ALL evaluated programs (both correct and incorrect)
-        # for meta learning
+                                                                   
+                           
         self.evaluated_since_last_meta.append(program)
         logger.info(
             f"Added program {program.id} to meta memory tracking "
@@ -60,7 +60,7 @@ class MetaSummarizer:
             f"total: {len(self.evaluated_since_last_meta)})"
         )
 
-        # Log when we're getting close to the meta update threshold
+                                                                   
         if hasattr(self, "_last_logged_count"):
             if len(self.evaluated_since_last_meta) != self._last_logged_count:
                 logger.debug(
@@ -78,7 +78,7 @@ class MetaSummarizer:
         if meta_rec_interval is None or not self.meta_llm_client:
             return False
 
-        # Use number of unprocessed programs instead of generation count
+                                                                        
         unprocessed_count = len(self.evaluated_since_last_meta)
         return unprocessed_count >= meta_rec_interval
 
@@ -94,7 +94,7 @@ class MetaSummarizer:
             logger.warning("No meta LLM client configured")
             return None, 0.0
 
-        # Use recently evaluated programs for memory scratchpad
+                                                               
         programs_to_analyze = (
             self.evaluated_since_last_meta if self.evaluated_since_last_meta else []
         )
@@ -106,7 +106,7 @@ class MetaSummarizer:
         total_meta_cost = 0.0
 
         try:
-            # Step 1: Create individual program summaries
+                                                         
             individual_summaries, step1_cost = self._step1_individual_summaries(
                 programs_to_analyze
             )
@@ -115,7 +115,7 @@ class MetaSummarizer:
                 logger.error("Step 1 failed - no individual summaries generated")
                 return None, total_meta_cost
 
-            # Step 2: Generate global insights scratchpad
+                                                         
             global_insights, step2_cost = self._step2_global_insights(
                 individual_summaries, best_program
             )
@@ -124,7 +124,7 @@ class MetaSummarizer:
                 logger.error("Step 2 failed - no global insights generated")
                 return None, total_meta_cost
 
-            # Step 3: Generate recommendations based on insights
+                                                                
             recommendations, step3_cost = self._step3_generate_recommendations(
                 global_insights, best_program
             )
@@ -133,8 +133,8 @@ class MetaSummarizer:
                 logger.error("Step 3 failed - no recommendations generated")
                 return None, total_meta_cost
 
-            # Update internal state
-            # Concatenate new individual summaries to existing ones
+                                   
+                                                                   
             if self.meta_summary:
                 self.meta_summary += "\n\n" + individual_summaries
             else:
@@ -143,7 +143,7 @@ class MetaSummarizer:
             self.meta_scratch_pad = global_insights
             self.meta_recommendations = recommendations
 
-            # Store the newly generated recommendations in history immediately
+                                                                              
             if recommendations and isinstance(recommendations, str):
                 self.meta_recommendations_history.append(recommendations)
                 logger.debug(
@@ -158,9 +158,9 @@ class MetaSummarizer:
             logger.error(f"Failed to complete 3-step meta-analysis: {e}")
             return None, total_meta_cost
 
-        # Clear the evaluated programs list immediately after processing
-        # This ensures that only programs added AFTER this meta update
-        # will be saved as "unprocessed" programs
+                                                                        
+                                                                      
+                                                 
         num_processed = len(self.evaluated_since_last_meta)
         self.total_programs_processed += num_processed
         self.evaluated_since_last_meta = []
@@ -225,7 +225,7 @@ class MetaSummarizer:
             logger.warning("No programs to analyze in Step 1")
             return None, 0.0
 
-        # Create individual program messages for batch processing
+                                                                 
         user_messages, generation_ids, patch_names, correct_programs = [], [], [], []
         for program in programs_to_analyze:
             individual_program_msg = construct_individual_program_msg(
@@ -241,7 +241,7 @@ class MetaSummarizer:
             )
             user_messages.append(user_msg)
 
-        # Use batch query to process all programs
+                                                 
         num_programs = len(programs_to_analyze)
         logger.info(f"==> Step 1 - Processing {num_programs} programs with batch query")
         responses = self.meta_llm_client.batch_kwargs_query(
@@ -254,13 +254,13 @@ class MetaSummarizer:
             logger.error("Step 1: Failed to get responses from meta LLM client")
             return None, 0.0
 
-        # Filter out None responses and combine summaries
+                                                         
         valid_responses = [r for r in responses if r is not None]
         if not valid_responses:
             logger.error("Step 1: All batch responses were None")
             return None, 0.0
 
-        # Combine all individual summaries
+                                          
         combined_summaries = []
         total_cost = 0.0
         for i, response in enumerate(valid_responses):
@@ -273,8 +273,8 @@ class MetaSummarizer:
             else:
                 logger.warning(f"Step 1: Empty response for program {i}")
 
-        # Sort combined_summaries by generation (using generation_ids)
-        # Zip together summaries and their generation, sort, then extract summaries
+                                                                      
+                                                                                   
         summaries_with_gen = list(zip(generation_ids, combined_summaries))
         summaries_with_gen.sort(key=lambda x: x[0])
         combined_summaries = [summary for _, summary in summaries_with_gen]
@@ -283,7 +283,7 @@ class MetaSummarizer:
             logger.error("Step 1: No valid summaries generated")
             return None, total_cost
 
-        # Join all summaries with double newlines
+                                                 
         final_summary = "\n\n".join(combined_summaries)
         logger.info(
             f"==> Step 1 - {len(combined_summaries)}/{num_programs} "
@@ -297,7 +297,7 @@ class MetaSummarizer:
         """Step 2: Generate global insights from individual summaries."""
         previous_insights = self.meta_scratch_pad or "*No previous insights available.*"
 
-        # Format best program information
+                                         
         if best_program:
             from shinka.prompts import construct_individual_program_msg
 
@@ -337,7 +337,7 @@ class MetaSummarizer:
             self.meta_recommendations or "*No previous recommendations available.*"
         )
 
-        # Format best program information
+                                         
         if best_program:
             from shinka.prompts import construct_individual_program_msg
 
@@ -385,7 +385,7 @@ class MetaSummarizer:
             self.meta_scratch_pad if isinstance(self.meta_scratch_pad, str) else None
         )
 
-        # Debug logging
+                       
         logger.debug(
             f"get_current() returning: "
             f"recommendations={'Yes' if recommendations else 'No'}, "
@@ -437,7 +437,7 @@ class MetaSummarizer:
         2. Unprocessed programs that haven't been summarized yet
         """
         try:
-            # Only serialize unprocessed programs (those added since last meta update)
+                                                                                      
             unprocessed_programs_data = []
             failed_serializations = 0
 
@@ -459,16 +459,16 @@ class MetaSummarizer:
                 "total_programs_meta_processed": self.total_programs_processed,
             }
 
-            # Ensure directory exists
+                                     
             filepath_obj = Path(filepath)
             filepath_obj.parent.mkdir(parents=True, exist_ok=True)
-            # Write to temporary file first, then rename for atomic operation
+                                                                             
             temp_filepath = filepath_obj.with_suffix(".tmp")
 
             with open(temp_filepath, "w", encoding="utf-8") as f:
                 json.dump(meta_data, f, indent=2, default=str)
 
-            # Atomic rename
+                           
             temp_filepath.replace(filepath_obj)
 
             saved_count = len(unprocessed_programs_data)
@@ -482,7 +482,7 @@ class MetaSummarizer:
                 f"history: {len(self.meta_recommendations_history)} items"
             )
 
-            # Debug logging for what's being saved
+                                                  
             if self.meta_recommendations:
                 rec_preview = (
                     self.meta_recommendations[:100] + "..."
@@ -497,7 +497,7 @@ class MetaSummarizer:
             else:
                 logger.debug("No meta recommendations to save")
 
-            # Debug: Log program IDs being saved
+                                                
             if saved_count > 0:
                 program_ids = [
                     prog.get("id", "no-id")[:8]
@@ -514,7 +514,7 @@ class MetaSummarizer:
             import traceback
 
             logger.debug(f"Full traceback: {traceback.format_exc()}")
-            # Clean up temp file if it exists
+                                             
             temp_filepath = Path(filepath).with_suffix(".tmp")
             if temp_filepath.exists():
                 try:
@@ -530,7 +530,7 @@ class MetaSummarizer:
             return False
 
         try:
-            # Check file size and readability
+                                             
             file_size = filepath_obj.stat().st_size
             if file_size == 0:
                 logger.warning(f"Meta state file is empty: {filepath}")
@@ -541,19 +541,19 @@ class MetaSummarizer:
             with open(filepath, "r", encoding="utf-8") as f:
                 meta_data = json.load(f)
 
-            # Validate the loaded data structure
+                                                
             if not isinstance(meta_data, dict):
                 logger.error(
                     f"Invalid meta state format: expected dict, got {type(meta_data)}"
                 )
                 return False
 
-            # Support both old format (evaluated_programs) and new format
-            # (unprocessed_programs)
-            # for backward compatibility
+                                                                         
+                                    
+                                        
             prog_list = meta_data.get("unprocessed_programs", [])
             if not prog_list and "evaluated_programs" in meta_data:
-                # Backward compatibility: load from old format but warn
+                                                                       
                 prog_list = meta_data.get("evaluated_programs", [])
                 logger.warning(
                     "Loading from old meta memory format with all evaluated programs"
@@ -562,14 +562,14 @@ class MetaSummarizer:
             prog_count = len(prog_list)
             logger.info(f"Meta state contains {prog_count} unprocessed programs")
 
-            # Debug: Log the first program structure if available
+                                                                 
             if prog_count > 0:
                 logger.debug(
                     f"First program keys: "
                     f"{list(prog_list[0].keys()) if prog_list[0] else 'None'}"
                 )
 
-            # Restore evaluated programs with error handling
+                                                            
             restored_programs = []
             failed_programs = 0
 
@@ -585,7 +585,7 @@ class MetaSummarizer:
                         failed_programs += 1
                         continue
 
-                    # Check if required fields exist
+                                                    
                     required_fields = ["id", "code", "language", "generation"]
                     missing_fields = [f for f in required_fields if f not in prog_dict]
                     if missing_fields:
@@ -616,7 +616,7 @@ class MetaSummarizer:
                 f"unprocessed programs to memory"
             )
 
-            # Restore meta state
+                                
             self.meta_summary = meta_data.get("meta_summary")
             self.meta_scratch_pad = meta_data.get("meta_scratch_pad")
             self.meta_recommendations = meta_data.get("meta_recommendations")
@@ -627,7 +627,7 @@ class MetaSummarizer:
                 "total_programs_meta_processed", 0
             )
 
-            # Debug logging for meta recommendations
+                                                    
             if self.meta_recommendations:
                 rec_preview = (
                     self.meta_recommendations[:100] + "..."

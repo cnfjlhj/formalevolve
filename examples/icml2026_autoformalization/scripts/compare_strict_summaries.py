@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -38,7 +38,7 @@ def main() -> int:
     a_n = int(a.get("num_problems") or 0)
     b_n = int(b.get("num_problems") or 0)
     if a_n != b_n:
-        # Still compare, but make it explicit.
+                                              
         print(f"[warn] num_problems differ: {args.label_a}={a_n} vs {args.label_b}={b_n}")
 
     for label, obj, n in [(args.label_a, a, a_n), (args.label_b, b, b_n)]:
@@ -48,7 +48,7 @@ def main() -> int:
         print(f"{label}: compile_hit_db = {ch}/{n} = {_rate(ch, n):.3f}")
         print(f"{label}: semantic_hit_db = {sh}/{n} = {_rate(sh, n):.3f}")
 
-    # Delta (B - A)
+                   
     a_ch = int(a.get("compile_hit_db") or 0)
     a_sh = int(a.get("semantic_hit_db") or 0)
     b_ch = int(b.get("compile_hit_db") or 0)

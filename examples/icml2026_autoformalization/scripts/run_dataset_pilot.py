@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+                      
 from __future__ import annotations
 
 import argparse
@@ -75,8 +75,8 @@ def _resolve_seedbank_dir(init_programs_root: Path, problem_name: str, problem_i
     if direct.exists() and direct.is_dir():
         return direct
 
-    # Prefer an explicit index-prefixed directory when available.
-    # ProofNet-style seedbanks are commonly laid out as: 0000_<problem_name>, 0001_<problem_name>, ...
+                                                                 
+                                                                                                      
     try:
         idx = int(problem_index)
     except Exception:
@@ -90,7 +90,7 @@ def _resolve_seedbank_dir(init_programs_root: Path, problem_name: str, problem_i
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
-        # If multiple exist, fall back to the index-prefixed one when possible.
+                                                                               
         if idx >= 0:
             indexed = root / f"{idx:04d}_{problem_name}"
             if indexed in matches:
@@ -191,10 +191,10 @@ def write_problem_inputs(
         "use_beq": bool(use_beq),
         "use_semantic": bool(use_semantic),
         "use_cycle_consistency": bool(use_cycle_consistency),
-        # Optional seedbank for Gen0 bootstrapping. The runner expects this to
-        # point to a seedbank directory containing either:
-        # - seed_i/main.lean, or
-        # - gen_0/seed_i/main.lean
+                                                                              
+                                                          
+                                
+                                  
         "init_programs_dir": str(init_programs_dir or "").strip(),
         "cycle_api_base_url": cycle_api_base_url,
         "cycle_model_name": cycle_model_name,
@@ -295,7 +295,7 @@ def run_one(
     ]
 
     env = os.environ.copy()
-    # Keep logs deterministic-ish and readable.
+                                               
     env.setdefault("PYTHONUNBUFFERED", "1")
 
     with log_path.open("w", encoding="utf-8") as out, err_path.open("w", encoding="utf-8") as err:
@@ -343,7 +343,7 @@ def main() -> int:
     parser.add_argument("--cycle_api_base_url", type=str, default=os.environ.get("CYCLE_API_BASE_URL", ""))
     parser.add_argument("--cycle_model_name", type=str, default=os.environ.get("CYCLE_MODEL_NAME", "Qwen2.5-32B-Instruct"))
 
-    # CriticLean semantic judge (used when --use_semantic is enabled).
+                                                                      
     parser.add_argument(
         "--criticlean_base_url",
         type=str,
@@ -379,7 +379,7 @@ def main() -> int:
         action="store_true",
         help="Set experiment defaults in child runs: K=2 islands, archive=40, migration 10/0.1.",
     )
-    # Default ON (paper/system default). Provide an explicit disable flag for ablations.
+                                                                                        
     parser.add_argument(
         "--use_cycle_consistency",
         dest="use_cycle_consistency",
@@ -507,11 +507,11 @@ def main() -> int:
     tasks = []
     init_programs_root = Path(args.init_programs_root).resolve() if args.init_programs_root else None
 
-    # Resolve CriticLean env vars once (shared across all problems).
+                                                                    
     criticlean_chat_url = ""
     criticlean_model = ""
     if bool(args.use_semantic):
-        # Prefer explicit base_url, otherwise fall back to env CRITIC_LEAN_URL.
+                                                                               
         if args.criticlean_base_url:
             criticlean_chat_url = _criticlean_chat_url(args.criticlean_base_url)
             if not criticlean_chat_url:
@@ -521,7 +521,7 @@ def main() -> int:
 
         criticlean_model = str(args.criticlean_model or os.environ.get("CRITIC_LEAN_MODEL", "") or "").strip()
         if criticlean_chat_url and not criticlean_model and args.criticlean_base_url:
-            # Auto-detect when the server hosts a single model (common for vLLM).
+                                                                                 
             criticlean_model = _probe_single_openai_model_id(args.criticlean_base_url, timeout_s=3.0)
 
         if not criticlean_chat_url:
@@ -533,7 +533,7 @@ def main() -> int:
                 "--use_semantic requires CriticLean model id. Provide --criticlean_model or set CRITIC_LEAN_MODEL."
             )
 
-        # Record the resolved critic endpoint/model for auditability.
+                                                                     
         manifest["criticlean_url"] = criticlean_chat_url
         manifest["criticlean_model"] = criticlean_model
 
@@ -569,7 +569,7 @@ def main() -> int:
 
     (out_root / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # Simple concurrency controller (keeps the script dependency-free).
+                                                                       
     running: List[Dict[str, Any]] = []
     pending = list(tasks)
     finished: List[Dict[str, Any]] = []
@@ -676,7 +676,7 @@ def main() -> int:
                         "PARENT_USAGE_PENALTY_ALPHA": "0.05",
                         "SOFTMAX_TEMPERATURE": "3.5",
                         "AUTOFORMAL_CROSS_K": "1",
-                        # Paper-aligned seedbank debiting (applies only when a seedbank is used).
+                                                                                                 
                         "AUTOFORMAL_SEEDBANK_DEBIT_CALLS": "1",
                         "AUTOFORMAL_SEEDBANK_CALLS_PER_SEED": "1",
                         "AUTOFORMAL_SEEDBANK_DEBIT_SEED0": "1",
@@ -716,7 +716,7 @@ def main() -> int:
                 finished.append(r)
             running = still_running
 
-            # Periodic heartbeat summary.
+                                         
             (out_root / "status.json").write_text(
                 json.dumps(
                     {
@@ -751,7 +751,7 @@ def main() -> int:
         (out_root / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
         return 0
     finally:
-        # Best-effort cleanup if the launcher itself is interrupted.
+                                                                    
         for r in running:
             try:
                 r["proc"].terminate()

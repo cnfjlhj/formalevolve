@@ -1,23 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Minimal nohup launcher for the pilot runner.
-#
-# This script intentionally only exposes the configuration used by the main pipeline:
-# - Generator LLM (OpenAI-compatible): OPENAI_LLM_BASE_URL + AUTOFORMAL_LLM_MODELS
-# - Semantic judge (CriticLean): CRITIC_LEAN_BASE_URL (or CRITIC_LEAN_URL) + optional model auto-detect
-# - Optional seedbank reuse: INIT_PROGRAMS_ROOT + NUM_INIT_CANDIDATES_GEN0
-#
-# Usage:
-#   OPENAI_LLM_BASE_URL="http://<host>:<port>/v1" \
-#   AUTOFORMAL_LLM_MODELS="Qwen3-30B-A3B" \
-#   CRITIC_LEAN_BASE_URL="http://<host>:<port>" \
-#   bash examples/icml2026_autoformalization/scripts/nohup_run_demo.sh proofnet_test 20 100
-#
-# Optional seedbank (Kimina) for Gen0 bootstrapping:
-#   INIT_PROGRAMS_ROOT="/path/to/seedbanks_root" \
-#   NUM_INIT_CANDIDATES_GEN0=16 \
-#   bash .../nohup_run_demo.sh proofnet_test 20 100
 
 die() { echo "[nohup_run_demo] ERROR: $*" >&2; exit 2; }
 
@@ -38,7 +21,6 @@ if [[ -z "${AUTOFORMAL_LLM_MODELS:-}" ]]; then
   die "Set AUTOFORMAL_LLM_MODELS (e.g. Qwen3-30B-A3B)"
 fi
 
-# CriticLean: prefer base URL (easier), fall back to full URL.
 CRITIC_BASE="${CRITIC_LEAN_BASE_URL:-}"
 CRITIC_URL="${CRITIC_LEAN_URL:-}"
 if [[ -z "${CRITIC_BASE}" && -z "${CRITIC_URL}" ]]; then
@@ -49,13 +31,10 @@ TS="$(date +%Y%m%d_%H%M%S)"
 OUT_ROOT="${OUT_ROOT:-${ROOT_DIR}/results_demo_${DATASET}__n${NUM_PROBLEMS}__calls${MAX_CALLS}__${TS}}"
 mkdir -p "${OUT_ROOT}"
 
-# Seedbank reuse (optional). If provided, we also recommend reusing the seedbank evaluation
-# artifacts to avoid re-compiling seeds.
 INIT_ROOT="${INIT_PROGRAMS_ROOT:-}"
 NUM_INIT="${NUM_INIT_CANDIDATES_GEN0:-16}"
 export AUTOFORMAL_REUSE_INIT_EVAL="${AUTOFORMAL_REUSE_INIT_EVAL:-1}"
 
-# Budget-facing debit for seedbank reuse.
 export AUTOFORMAL_SEEDBANK_DEBIT_CALLS="${AUTOFORMAL_SEEDBANK_DEBIT_CALLS:-1}"
 export AUTOFORMAL_SEEDBANK_CALLS_PER_SEED="${AUTOFORMAL_SEEDBANK_CALLS_PER_SEED:-1}"
 

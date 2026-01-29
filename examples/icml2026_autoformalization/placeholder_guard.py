@@ -20,7 +20,7 @@ from typing import Optional
 _EVOLVE_MARKER_RE = re.compile(r"^\s*(?:#|//|--)?\s*EVOLVE-BLOCK-(?:START|END)\s*$")
 _HEADER_LINE_RE = re.compile(r"^\s*(?:import|open\s+scoped|open)\b")
 
-# Keep this list small and stable: we only need common named declarations.
+                                                                          
 _LEAN_DECL_KEYWORDS = (
     "theorem",
     "lemma",
@@ -40,9 +40,9 @@ def _strip_lean_comments(text: str) -> str:
     """Best-effort comment stripping for generated Lean snippets (non-nested block comments)."""
     if not text:
         return ""
-    # Remove block comments (non-nested; sufficient for our generated code).
+                                                                            
     text = re.sub(r"/-.*?-/", "", text, flags=re.DOTALL)
-    # Remove line comments.
+                           
     text = re.sub(r"(?m)--.*$", "", text)
     return text
 
@@ -64,7 +64,7 @@ def extract_first_lean_declaration(code: str) -> str:
     m = _DECL_START_RE.search(cleaned)
     if not m:
         return ""
-    # In generated candidates we typically have a single declaration; take suffix.
+                                                                                  
     return cleaned[m.start() :].strip()
 
 
@@ -74,7 +74,7 @@ def parse_lean_decl_type(decl: str) -> Optional[str]:
     if not s:
         return None
 
-    # Find the ':' that separates the binder/name part from the type, at paren/bracket depth 0.
+                                                                                               
     depth = 0
     type_colon_idx: Optional[int] = None
     for i, ch in enumerate(s):
@@ -83,7 +83,7 @@ def parse_lean_decl_type(decl: str) -> Optional[str]:
         elif ch in ")]}":
             depth = max(depth - 1, 0)
         elif ch == ":" and depth == 0:
-            # Skip ':='
+                       
             if i + 1 < len(s) and s[i + 1] == "=":
                 continue
             type_colon_idx = i
@@ -92,7 +92,7 @@ def parse_lean_decl_type(decl: str) -> Optional[str]:
     if type_colon_idx is None:
         return None
 
-    # Find ':=' that starts the proof/definition, again at depth 0.
+                                                                   
     depth = 0
     end_idx = len(s)
     j = type_colon_idx + 1
@@ -141,11 +141,11 @@ def is_trivial_tautology_placeholder(code: str, *, level: Optional[int] = None) 
     This is intentionally conservative and syntactic: we only analyze the first
     top-level declaration's type string (normalized).
     """
-    # Levels:
-    #   0: disabled
-    #   1: only `: True`
-    #   2: + (`_ → True`, `∀ _, True`, `False → _`)
-    #   3: + reflexive equality `x = x`
+             
+                   
+                        
+                                                   
+                                       
     lvl = int(level) if level is not None else _get_env_int("AUTOFORMAL_TAUTOLOGY_GUARD_LEVEL", 1)
     if lvl <= 0:
         return False
