@@ -32,7 +32,9 @@ class Config:
     # =========================================================================
     # LLM Configuration
     # =========================================================================
-    llm_model: str = "/data/hf/.cache/huggingface/hub/Kimina-Autoformalizer-7B"
+    # Keep this as a model *identifier* (not a machine-specific local cache path)
+    # to avoid leaking environment details in anonymous releases.
+    llm_model: str = "Kimina-Autoformalizer-7B"
     temperature: float = 0.7
     top_p: float = 0.95
     max_tokens: int = 1536
