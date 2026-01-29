@@ -90,7 +90,7 @@ def _query_one(conn: sqlite3.Connection, sql: str, args: Tuple[Any, ...] = ()) -
     return None if row is None else row[0]
 
 
-def _query_best_program(conn: sqlite3.Connection) -> sqlite3.Row:
+def _query_best_program(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
     # Prefer non-null combined_score; break ties deterministically by timestamp then id.
     cur = conn.execute(
         """
@@ -102,9 +102,7 @@ def _query_best_program(conn: sqlite3.Connection) -> sqlite3.Row:
         """
     )
     row = cur.fetchone()
-    if row is None:
-        raise RuntimeError("No programs with non-null combined_score found in DB")
-    return row
+    return None if row is None else row
 
 
 def _bool_hit(conn: sqlite3.Connection, json_key: str) -> int:
@@ -191,10 +189,15 @@ def _collect_rows(run_root: Path) -> Tuple[List[ProblemStrictRow], Dict[str, Any
         term = _load_json(term_path)
         with _open_db(db_path) as conn:
             best_row = _query_best_program(conn)
-            best_id = str(best_row["id"])
-            best_generation = int(best_row["generation"])
-            best_island_idx = best_row["island_idx"]
-            best_island_idx_int = None if best_island_idx is None else int(best_island_idx)
+            if best_row is None:
+                best_id = ""
+                best_generation = -1
+                best_island_idx_int = None
+            else:
+                best_id = str(best_row["id"])
+                best_generation = int(best_row["generation"])
+                best_island_idx = best_row["island_idx"]
+                best_island_idx_int = None if best_island_idx is None else int(best_island_idx)
 
             rows.append(
                 ProblemStrictRow(

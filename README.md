@@ -89,7 +89,9 @@ python examples/icml2026_autoformalization/scripts/run_dataset_pilot.py \
   --concurrency 2 \
   --num_generations 400 \
   --compile_timeout 60 \
+  --paper_protocol \
   --use_semantic \
+  --enable_semantic_repair \
   --no_cycle_consistency \
   --criticlean_base_url "<CRITICLEAN_BASE_URL>" \
   --criticlean_model "<CRITICLEAN_MODEL_ID>" \

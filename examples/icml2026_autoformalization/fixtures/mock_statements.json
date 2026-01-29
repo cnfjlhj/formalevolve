@@ -1,5 +1,5 @@
 [
-  "theorem my_fixture_1 : True := by sorry",
-  "theorem my_fixture_2 (n : Nat) : n = n := by sorry"
+  "theorem my_fixture_2 (n : Nat) : n + 0 = n := by sorry",
+  "theorem my_fixture_3 (a b : Nat) : a + b = b + a := by sorry",
+  "theorem my_fixture_1 : True := by sorry"
 ]
-

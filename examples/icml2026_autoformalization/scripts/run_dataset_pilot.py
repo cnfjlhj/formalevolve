@@ -369,6 +369,16 @@ def main() -> int:
 
     parser.add_argument("--use_beq", action="store_true")
     parser.add_argument("--use_semantic", action="store_true")
+    parser.add_argument(
+        "--enable_semantic_repair",
+        action="store_true",
+        help="Enable bounded semantic repair when semantic judging is enabled (paper-aligned).",
+    )
+    parser.add_argument(
+        "--paper_protocol",
+        action="store_true",
+        help="Pin paper-aligned env defaults in child runs (K=2 islands, archive=40, migration 10/0.1, etc.).",
+    )
     # Default ON (paper/system default). Provide an explicit disable flag for ablations.
     parser.add_argument(
         "--use_cycle_consistency",
@@ -486,6 +496,8 @@ def main() -> int:
         "criticlean_model": args.criticlean_model,
         "use_beq": bool(args.use_beq),
         "use_semantic": bool(args.use_semantic),
+        "enable_semantic_repair": bool(args.enable_semantic_repair),
+        "paper_protocol": bool(args.paper_protocol),
         "use_cycle_consistency": bool(args.use_cycle_consistency),
         "max_parallel_jobs_per_problem": args.max_parallel_jobs,
         "meta_rec_interval": args.meta_rec_interval,
@@ -586,6 +598,8 @@ def main() -> int:
                     f"criticlean_model={criticlean_model if bool(args.use_semantic) else ''}",
                     f"lean_server_url={args.lean_server_url}",
                     f"use_semantic={bool(args.use_semantic)}",
+                    f"enable_semantic_repair={bool(args.enable_semantic_repair)}",
+                    f"paper_protocol={bool(args.paper_protocol)}",
                 ]
             )
             + "\n",
@@ -646,6 +660,24 @@ def main() -> int:
                 **(
                     {"CRITIC_LEAN_URL": criticlean_chat_url, "CRITIC_LEAN_MODEL": criticlean_model}
                     if bool(args.use_semantic)
+                    else {}
+                ),
+                **({"AUTOFORMAL_ENABLE_SEMANTIC_REPAIR": "1"} if bool(args.enable_semantic_repair) else {}),
+                **(
+                    {
+                        "AUTOFORMAL_ENABLE_EVOLAST_FALLBACK": "1",
+                        "AUTOFORMAL_EVOLAST_MODE": "aggressive",
+                        "AUTOFORMAL_MAX_PATCH_ATTEMPTS": "1",
+                        "AUTOFORMAL_NUM_ISLANDS": "2",
+                        "AUTOFORMAL_ENFORCE_ISLAND_SEPARATION": "1",
+                        "AUTOFORMAL_ARCHIVE_SIZE": "40",
+                        "AUTOFORMAL_MIGRATION_INTERVAL": "10",
+                        "AUTOFORMAL_MIGRATION_RATE": "0.1",
+                        "PARENT_USAGE_PENALTY_ALPHA": "0.05",
+                        "SOFTMAX_TEMPERATURE": "3.5",
+                        "AUTOFORMAL_CROSS_K": "1",
+                    }
+                    if bool(args.paper_protocol)
                     else {}
                 ),
             },

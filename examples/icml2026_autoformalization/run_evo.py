@@ -833,7 +833,7 @@ def main():
     parser.add_argument(
         "--max_repair_attempts_gen0",
         type=int,
-        default=5,
+        default=2,
         help="Maximum compile repair attempts for generation 0 (bootstrap)",
     )
     parser.add_argument(
