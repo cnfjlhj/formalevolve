@@ -216,6 +216,7 @@ The evolution loop proposes edits via a small set of patch styles (paper-aligned
 How to tune:
 - `run_evo.py` flags: `--patch_types`, `--patch_type_probs`
 - env vars: `AUTOFORMAL_PATCH_TYPES`, `AUTOFORMAL_PATCH_TYPE_PROBS`
+- patch attempts per step (paper default is 1): `AUTOFORMAL_MAX_PATCH_ATTEMPTS`
 
 Example:
 
@@ -230,6 +231,24 @@ python examples/icml2026_autoformalization/run_evo.py \
   --patch_type_probs "0.5,0.3,0.2" \
   --max_llm_calls 100
 ```
+
+## EvolAST fallback (paper-aligned default)
+
+FormalEvolve includes an EvolAST-style rule-based mutation operator that rewrites only the theorem *type*
+(binder types + goal type), keeping the proof body unchanged.
+
+In the paper-aligned protocol, EvolAST is:
+- **enabled by default** (set `AUTOFORMAL_ENABLE_EVOLAST_FALLBACK=0` to disable, e.g., for ablations),
+- **aggressive by default** (set `AUTOFORMAL_EVOLAST_MODE=safe` for a semantics-preserving no-op that only adds redundant parentheses),
+- used as a fallback on:
+  - exact-duplicate LLM patch proposals, and
+  - compilation failures (attempted alongside bounded compile repair).
+
+Key knobs (all optional):
+- `AUTOFORMAL_EVOLAST_MODE`: `aggressive` (default) or `safe`
+- `AUTOFORMAL_EVOLAST_P`: rewrite probability per traversal (default `0.35`)
+- `AUTOFORMAL_EVOLAST_MAX_REWRITES`: cap on applied rewrites (default `32`)
+- `AUTOFORMAL_EVOLAST_RULE_WEIGHTS`: rule weights as JSON (`{"commutativity": 2.0, ...}`) or `k=v,k=v` string
 
 ## Evaluation (strict + paper metrics)
 
@@ -258,6 +277,7 @@ For fine-grained knobs, use `run_evo.py` directly (single problem) and/or set en
 - **Parent sampling**: `--parent_selection_strategy`, `--num_archive_inspirations`, `--num_top_k_inspirations`
 - **Patch styles**: `--patch_types`, `--patch_type_probs`
 - **Repairs**: `--max_repair_attempts`, `--max_repair_attempts_gen0` (or `--disable_repair`)
+- **EvolAST**: `AUTOFORMAL_ENABLE_EVOLAST_FALLBACK`, `AUTOFORMAL_EVOLAST_MODE`, `AUTOFORMAL_EVOLAST_P`, `AUTOFORMAL_EVOLAST_MAX_REWRITES`
 
 ## Supplementary zip (ICML-style code snapshot)
 

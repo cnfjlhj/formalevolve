@@ -594,8 +594,9 @@ def apply_evolast_to_lean_code(
     - `aggressive` enables the original rule-based mutation for the supported
       expression subset, with a strict fallback to raw text when parsing is partial.
     """
+    # Paper-aligned default: run EvolAST in aggressive rule-based mode unless explicitly set to `safe`.
     mode_eff = str(
-        (mode or os.environ.get("AUTOFORMAL_EVOLAST_MODE") or "safe")
+        (mode or os.environ.get("AUTOFORMAL_EVOLAST_MODE") or "aggressive")
     ).strip().lower()
     if mode_eff not in {"aggressive", "unsafe"}:
         return apply_evolast_safe_to_lean_code(code)

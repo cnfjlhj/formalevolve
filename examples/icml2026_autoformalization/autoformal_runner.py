@@ -1088,7 +1088,9 @@ class AutoformalizationRunner(EvolutionRunner):
         # - EvolAST fallback: if enabled, we may apply deterministic AST rewrites on the parent
         #   when the LLM patch is an exact duplicate (and repair is disabled), to avoid "no-op" collapse.
         # - Seedbank debit: if enabled, count each seedbank seed as N "budget calls" (fairness).
-        self.enable_evolast_fallback: bool = _env_truthy("AUTOFORMAL_ENABLE_EVOLAST_FALLBACK", default=False)
+        # Paper-aligned default: EvolAST fallback is enabled unless explicitly disabled.
+        # Set `AUTOFORMAL_ENABLE_EVOLAST_FALLBACK=0` to disable (e.g., for ablations).
+        self.enable_evolast_fallback: bool = _env_truthy("AUTOFORMAL_ENABLE_EVOLAST_FALLBACK", default=True)
         self.seedbank_debit_calls: bool = _env_truthy("AUTOFORMAL_SEEDBANK_DEBIT_CALLS", default=False)
         self.seedbank_calls_per_seed: int = int(_env_int("AUTOFORMAL_SEEDBANK_CALLS_PER_SEED") or 0)
         self.seedbank_debit_seed0: bool = _env_truthy("AUTOFORMAL_SEEDBANK_DEBIT_SEED0", default=False)
@@ -2115,7 +2117,7 @@ class AutoformalizationRunner(EvolutionRunner):
                             from evolast_lean import apply_evolast_to_lean_code, parse_rule_weights
 
                             evolast_fallback_mode = (
-                                os.environ.get("AUTOFORMAL_EVOLAST_MODE", "").strip() or "safe"
+                                os.environ.get("AUTOFORMAL_EVOLAST_MODE", "").strip() or "aggressive"
                             )
                             evolast_p = 0.35
                             evolast_max_rewrites = 32
@@ -2923,7 +2925,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 try:
                     from evolast_lean import apply_evolast_to_lean_code, parse_rule_weights
 
-                    evolast_mode = os.environ.get("AUTOFORMAL_EVOLAST_MODE", "").strip() or "safe"
+                    evolast_mode = os.environ.get("AUTOFORMAL_EVOLAST_MODE", "").strip() or "aggressive"
                     evolast_p = 0.35
                     evolast_max_rewrites = 32
                     try:

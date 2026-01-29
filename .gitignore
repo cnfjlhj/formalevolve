@@ -182,6 +182,7 @@ cython_debug/
 
 # Results directories
 results/
+results_*/
 **/results/
 **/output/
 **/outputs/

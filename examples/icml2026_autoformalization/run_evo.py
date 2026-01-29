@@ -600,7 +600,8 @@ def create_configs(
         num_generations=num_generations,
         max_parallel_jobs=int(max_parallel_jobs),  # parallel jobs within a single problem run
         max_patch_resamples=_cfg_int("AUTOFORMAL_MAX_PATCH_RESAMPLES", 3),  # resamples if generation fails
-        max_patch_attempts=_cfg_int("AUTOFORMAL_MAX_PATCH_ATTEMPTS", 3),  # max attempts per patch
+        # Paper-aligned default: one patch attempt per step (can be overridden via env).
+        max_patch_attempts=_cfg_int("AUTOFORMAL_MAX_PATCH_ATTEMPTS", 1),  # max attempts per patch
 
         # --- Job type ---
         job_type="local",           # local execution (vs. distributed)
