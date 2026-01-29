@@ -1,8 +1,6 @@
 # Cycle Consistency Autoformalization
 
-A lightweight implementation inspired by
-["Improving autoformalization via cycle consistency and incremental type-checking using language-model probabilistic programs"](https://arxiv.org/abs/...)
-(MATH-AI 2025).
+A lightweight implementation inspired by cycle-consistency style scoring.
 
 ## Core idea
 

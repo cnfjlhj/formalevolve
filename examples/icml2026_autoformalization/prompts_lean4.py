@@ -1,7 +1,7 @@
 """
 Lean 4 autoformalization prompt pack.
 
-This module overrides the default ShinkaEvolve prompts so they fit Lean 4 theorem-statement
+This module overrides the default engine prompts so they fit Lean 4 theorem-statement
 formalization.
 
 Design

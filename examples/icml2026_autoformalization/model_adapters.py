@@ -225,7 +225,7 @@ class GeneralAdapter(ModelAdapter):
 
     Characteristics:
     - Needs explicit, detailed instructions.
-    - Uses the standard ShinkaEvolve prompt protocol.
+    - Uses the standard prompt protocol.
     """
 
     def build_prompt(self, informal: str, header: str, theorem_id: Optional[int] = None) -> Tuple[str, str]:

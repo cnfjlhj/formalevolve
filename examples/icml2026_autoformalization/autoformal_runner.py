@@ -1,5 +1,5 @@
 """
-AutoformalizationRunner: ShinkaEvolve runner with repair_queue support.
+AutoformalizationRunner: evolution runner with repair_queue support.
 
 ================================================================================
                               Design overview
@@ -8,7 +8,7 @@ AutoformalizationRunner: ShinkaEvolve runner with repair_queue support.
 This file implements the main evolution loop for the autoformalization system.
 
 Why a custom runner?
-The default ShinkaEvolve EvolutionRunner archives every evaluated program, but our
+The default engine EvolutionRunner archives every evaluated program, but our
 protocol requires:
 - compile_ok=0 candidates must not enter the archive (Constraint B)
 - compile_ok=0 candidates should get repair attempts
@@ -1032,7 +1032,7 @@ class AutoformalizationRunner(EvolutionRunner):
     ================================================================================
 
     Inheritance
-    AutoformalizationRunner → EvolutionRunner → (ShinkaEvolve core)
+    AutoformalizationRunner → EvolutionRunner → (engine core)
 
     Key overridden methods
     - _process_completed_job(): process completed evaluations and add repair logic
@@ -1063,7 +1063,7 @@ class AutoformalizationRunner(EvolutionRunner):
         Initialize AutoformalizationRunner.
 
         Args:
-            evo_config: evolution config (from ShinkaEvolve)
+            evo_config: evolution config (from the engine)
             job_config: job config
             db_config: database config
             repair_config: repair config (optional; defaults to RepairConfig())

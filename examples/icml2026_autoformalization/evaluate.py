@@ -1,5 +1,5 @@
 """
-Evaluator for Lean4 Autoformalization using ShinkaEvolve.
+Evaluator for Lean4 Autoformalization.
 
 ================================================================================
                                Design Overview
@@ -1535,7 +1535,7 @@ def main(program_path: str, results_dir: str):
     """
     Evaluator entrypoint.
 
-    Called by ShinkaEvolve to evaluate a single candidate program.
+    Called by the engine to evaluate a single candidate program.
 
     Call chain
     run_evo.py → AutoformalizationRunner → scheduler → evaluate.py:main()
@@ -1548,7 +1548,7 @@ def main(program_path: str, results_dir: str):
     └────────┬─────────┘
              ↓
     ┌──────────────────┐
-    │ run_shinka_eval  │  ShinkaEvolve evaluation harness
+    │ run_shinka_eval  │  evaluation harness
     │   ├─ load program │
     │   ├─ execute      │
     │   └─ aggregate    │

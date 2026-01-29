@@ -226,7 +226,7 @@ def create_configs(
     init_program_path: str | None = None,
 ):
     """
-    Create all config objects required by ShinkaEvolve.
+    Create all config objects required by the underlying engine.
 
     Config objects
     - evo_config: core evolution-algorithm knobs

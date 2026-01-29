@@ -548,8 +548,8 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
 </head>
 <body>
     <div class="header-container">
-        {f'<img src="{logo_data_uri}" alt="Shinka Logo" class="header-logo">' if logo_data_uri else ""}
-        <h1 class="header-title">ShinkaEvolve Meta-Scratchpad: \
+        {f'<img src="{logo_data_uri}" alt="Logo" class="header-logo">' if logo_data_uri else ""}
+        <h1 class="header-title">FormalEvolve Meta-Scratchpad: \
 {generation}</h1>
     </div>
     {html_content}
