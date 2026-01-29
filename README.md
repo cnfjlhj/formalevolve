@@ -67,6 +67,8 @@ python examples/icml2026_autoformalization/run_evo.py \
 Notes:
 - When using an OpenAI-compatible local server (e.g., vLLM), also export `OPENAI_API_KEY=EMPTY`.
 - `--num_generations` can be set larger than needed; the budget `--max_llm_calls` is the hard stop.
+- Local compilation uses `lean-interact` and may download the Lean/Mathlib toolchain on first use.
+  The default local toolchain is Lean `v4.15.0` (override with `LEAN_INTERACT_LEAN_VERSION`).
 
 ### 3) Pilot run on a bundled benchmark (paper-aligned multi-problem)
 

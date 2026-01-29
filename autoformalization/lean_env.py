@@ -16,8 +16,17 @@ logger = logging.getLogger(__name__)
 _lean_server = None
 
 # Configuration
-LEAN_VERSION = "v4.8.0"
-LEAN_REQUIRE = "mathlib"
+#
+# Paper alignment:
+# - The ICML 2026 experiments use Lean 4.15.0 + Mathlib v4.15.0 (pinned via Kimina Lean Server).
+# - For the open-source reproducibility pipeline, local compilation uses `lean-interact` and
+#   downloads a matching Mathlib toolchain on first run.
+#
+# You can override these to match your environment:
+# - LEAN_INTERACT_LEAN_VERSION="v4.15.0"
+# - LEAN_INTERACT_REQUIRE="mathlib"
+LEAN_VERSION = os.environ.get("LEAN_INTERACT_LEAN_VERSION", "v4.15.0").strip() or "v4.15.0"
+LEAN_REQUIRE = os.environ.get("LEAN_INTERACT_REQUIRE", "mathlib").strip() or "mathlib"
 DEFAULT_CACHE_DIR = str(Path.home() / ".cache" / "lean_interact")
 DEFAULT_MAX_TOTAL_MEMORY = float(os.environ.get("LEAN_INTERACT_MAX_TOTAL_MEMORY", "0.90"))
 

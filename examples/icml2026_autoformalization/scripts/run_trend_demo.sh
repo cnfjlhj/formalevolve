@@ -33,12 +33,20 @@ OUT_BASE="${EXAMPLE_ROOT}/results_trend_${DATASET}_calls${MAX_CALLS}_${TS}"
 echo "[trend] dataset=${DATASET} num_problems=${NUM_PROBLEMS} max_llm_calls=${MAX_CALLS}"
 echo "[trend] out_base=${OUT_BASE}"
 
+EXTRA_SEM_ARGS=()
+if [[ -n "${CRITIC_LEAN_BASE_URL:-}" || -n "${CRITIC_LEAN_URL:-}" ]]; then
+  EXTRA_SEM_ARGS+=(--use_semantic --enable_semantic_repair)
+else
+  echo "[trend] NOTE: CRITIC_LEAN_BASE_URL/CRITIC_LEAN_URL not set; running compile-only (SH@T will be 0)."
+fi
+
 python "${EXAMPLE_ROOT}/scripts/run_dataset_pilot.py" \
   --dataset "${DATASET}" \
   --num_problems "${NUM_PROBLEMS}" \
   --max_llm_calls "${MAX_CALLS}" \
   --baseline_mode ours \
-  --use_semantic \
+  --paper_protocol \
+  "${EXTRA_SEM_ARGS[@]}" \
   --no_cycle_consistency \
   --out_root "${OUT_BASE}/ours"
 
@@ -47,7 +55,8 @@ python "${EXAMPLE_ROOT}/scripts/run_dataset_pilot.py" \
   --num_problems "${NUM_PROBLEMS}" \
   --max_llm_calls "${MAX_CALLS}" \
   --baseline_mode batchN \
-  --use_semantic \
+  --paper_protocol \
+  "${EXTRA_SEM_ARGS[@]}" \
   --no_cycle_consistency \
   --out_root "${OUT_BASE}/batchN"
 

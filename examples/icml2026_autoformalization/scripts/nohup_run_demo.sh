@@ -84,7 +84,9 @@ CMD=(python "${ROOT_DIR}/scripts/run_dataset_pilot.py"
   --max_parallel_jobs 1
   --compile_timeout "${COMPILE_TIMEOUT}"
   --lean_server_url local
+  --paper_protocol
   --use_semantic
+  --enable_semantic_repair
   --no_cycle_consistency
   --out_root "${OUT_ROOT}"
 )
