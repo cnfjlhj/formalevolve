@@ -98,6 +98,11 @@ python examples/icml2026_autoformalization/scripts/run_dataset_pilot.py \
   --out_root /tmp/formalevolve_pilot_proofnet_test
 ```
 
+### Where to tune paper hyperparameters
+
+- Prefer `--paper_protocol` (recommended): it pins paper-aligned defaults (islands/archive/migration/operator mix/EvolAST).
+- For manual tuning, use `python examples/icml2026_autoformalization/run_evo.py --help` and env vars (common ones: `AUTOFORMAL_NUM_ISLANDS`, `AUTOFORMAL_ARCHIVE_SIZE`, `AUTOFORMAL_MIGRATION_INTERVAL`, `AUTOFORMAL_MIGRATION_RATE`, `AUTOFORMAL_PARENT_SELECTION_LAMBDA`, `PARENT_USAGE_PENALTY_ALPHA`, `AUTOFORMAL_PATCH_TYPE_PROBS`, `AUTOFORMAL_MAX_PATCH_ATTEMPTS`, `AUTOFORMAL_EVOLAST_MODE`).
+
 ### Optional: use a dedicated patch/edit model
 
 If you have a specialized patch model (e.g. Qwen3-Patch), you can route **edit proposals**
@@ -203,10 +208,40 @@ python examples/icml2026_autoformalization/scripts/run_dataset_pilot.py \
   --num_init_candidates_gen0 16
 ```
 
+### How to build a seedbank (utility script)
+
+The repo includes a helper that runs **Gen0-only** (`num_generations=1`) per problem and exports
+only `gen_0/seed_i/main.lean` (and optional `metrics.json` for fast reuse):
+
+```bash
+python examples/icml2026_autoformalization/scripts/build_seedbank.py \
+  --dataset proofnet_test \
+  --num_problems 5 \
+  --seeds_per_problem 16 \
+  --llm_mode auto \
+  --openai_llm_base_url "http://<host>:<port>/v1" \
+  --llm_models "Kimina-Autoformalizer-7B"
+```
+
 Budget accounting (optional, paper-aligned fairness):
-- `AUTOFORMAL_SEEDBANK_DEBIT_CALLS=1` counts each reused seed as budget.
-- `AUTOFORMAL_SEEDBANK_CALLS_PER_SEED=1` sets the per-seed debit (e.g., `1` call/seed).
-- `AUTOFORMAL_REUSE_INIT_EVAL=1` reuses seedbank evaluation artifacts when available (faster).
+- `--paper_protocol` enables seedbank debiting (when a seedbank is used): each reused seed counts as `1` budget call.
+- You can override via env:
+  - `AUTOFORMAL_SEEDBANK_DEBIT_CALLS=1` / `AUTOFORMAL_SEEDBANK_CALLS_PER_SEED=1`
+  - `AUTOFORMAL_REUSE_INIT_EVAL=1` reuses seedbank evaluation artifacts when available (faster)
+
+## Dataset sanity checks (utilities)
+
+To audit whether dataset-provided ground-truth statements compile under your Lean toolchain:
+
+```bash
+python examples/icml2026_autoformalization/scripts/audit_ground_truth_compile.py \
+  --dataset proofnet_test \
+  --num_problems 50 \
+  --lean_server_url local \
+  --compile_timeout 60
+```
+
+The script redacts absolute paths (e.g., user home directories) from stored error logs to reduce anonymization risks.
 
 ## Patch mechanism configuration
 

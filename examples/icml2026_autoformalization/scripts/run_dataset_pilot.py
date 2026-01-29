@@ -676,6 +676,10 @@ def main() -> int:
                         "PARENT_USAGE_PENALTY_ALPHA": "0.05",
                         "SOFTMAX_TEMPERATURE": "3.5",
                         "AUTOFORMAL_CROSS_K": "1",
+                        # Paper-aligned seedbank debiting (applies only when a seedbank is used).
+                        "AUTOFORMAL_SEEDBANK_DEBIT_CALLS": "1",
+                        "AUTOFORMAL_SEEDBANK_CALLS_PER_SEED": "1",
+                        "AUTOFORMAL_SEEDBANK_DEBIT_SEED0": "1",
                     }
                     if bool(args.paper_protocol)
                     else {}
