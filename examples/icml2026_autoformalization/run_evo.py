@@ -3,42 +3,42 @@
 ShinkaEvolve runner for Lean4 Autoformalization.
 
 ================================================================================
-                              设计理念概述
+                               Design Overview
 ================================================================================
 
-本文件是 autoformalization 系统的"入口脚本"，负责：
-1. 解析命令行参数
-2. 创建各种配置对象
-3. 启动进化搜索
+This file is the entrypoint script for the autoformalization pipeline. It:
+1. parses CLI arguments
+2. creates config objects
+3. launches the evolutionary search
 
-【三个文件的职责分工】
+Responsibilities across the three main files
 ┌─────────────────┐     ┌──────────────────────┐     ┌─────────────┐
 │   run_evo.py    │ --> │ autoformal_runner.py │ --> │ evaluate.py │
-│   (入口/配置)    │     │    (进化主循环)        │     │   (评估器)   │
+│  (entry/config) │     │   (main evolution)   │     │ (evaluator) │
 └─────────────────┘     └──────────────────────┘     └─────────────┘
       ↓                          ↓                         ↓
-  解析参数              协调进化搜索过程            判断候选质量
-  创建配置              管理 repair_queue          门控适应度函数
-  启动运行              处理终止策略               Lean 编译检查
+  parse args               coordinate search          score candidates
+  create configs           manage repair queue        gated fitness function
+  start run                termination strategy       Lean compile check
 
-【为什么需要单独的入口脚本？】
-1. 配置与逻辑分离：配置变更不需要修改核心代码
-2. 实验便利：可以通过命令行快速切换参数
-3. 清晰的依赖关系：入口脚本 import 核心模块，而不是反过来
+Why a separate entrypoint?
+1. Separate config from logic: experiments can change config without touching core code.
+2. Convenience: quickly switch knobs via CLI.
+3. Clear dependency direction: the entrypoint imports core modules, not vice versa.
 
-【约束 G 的实现】
-规约要求：Header 注入 prompt，模型看到 header 后只输出 body。
-这在 build_task_sys_msg() 函数中实现，通过精心设计的 prompt 模板来约束 LLM 输出。
+Spec alignment (Constraint G)
+We intentionally avoid injecting dataset headers into prompts (to reduce prompt contamination).
+The task prompt is built in `build_task_sys_msg()` and asks the model to output a complete Lean 4 file.
 
 ================================================================================
-                              规约版本: v1.0 (Final)
+                           Spec Version: v1.0 (Final)
 ================================================================================
 
 Usage:
     python run_evo.py --informal "Prove that for any odd n, 8 divides n^2-1"
 
-约束满足:
-- [G] Header 注入 prompt - 模型看到 header 后只输出 body
+Constraints:
+- [G] No dataset header injection in prompts
 """
 
 import argparse
@@ -56,10 +56,10 @@ load_dotenv(dotenv_path=env_path, override=True)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # =============================================================================
-# 【关键】在导入 shinka.core 之前，用 Lean4 专用 prompt 替换默认 prompt
+# IMPORTANT: Patch Shinka prompts BEFORE importing shinka.core
 # =============================================================================
-# 原始的 shinka/prompts 是为通用代码生成设计的，不适合 Lean4 autoformalization。
-# 这里用 monkey-patch 方式替换，使进化过程使用 Lean4 专用的 prompt。
+# The original `shinka/prompts` are designed for generic code generation and are a poor fit
+# for Lean 4 autoformalization. We monkey-patch them so the evolution loop uses Lean 4 prompts.
 from prompts_lean4 import patch_all
 patch_all()
 
@@ -72,18 +72,18 @@ from autoformal_runner import AutoformalizationRunner, RepairConfig, Termination
 
 
 # =============================================================================
-# 默认问题（用于测试和演示）
+# Default problem (for quick tests / demos)
 # =============================================================================
 #
-# 【为什么需要默认问题？】
-# 1. 快速测试：不需要每次都传入参数
-# 2. 示例演示：展示输入的预期格式
-# 3. 回归测试：确保系统基本功能正常
+# Why keep a default problem?
+# 1. Quick sanity checks: avoid passing CLI flags every time
+# 2. Example/demo: documents the expected input format
+# 3. Regression checks: ensures the pipeline still runs end-to-end
 #
-# 【这个默认问题的选择理由】
-# - 数学上简单但不平凡：需要一定的 Lean 知识才能正确形式化
-# - 有明确的 ground truth：便于验证 BEq+ 功能
-# - 典型的定理形式：证明整除性
+# Why this particular default?
+# - Simple but non-trivial: needs Lean knowledge to formalize correctly
+# - Has a clear ground truth: convenient for BEq+ checks
+# - Typical theorem shape: a divisibility claim
 # =============================================================================
 
 DEFAULT_INFORMAL = """
@@ -94,20 +94,20 @@ DEFAULT_HEADER = """import Mathlib
 
 open Function Fintype Subgroup Ideal Polynomial Submodule Zsqrtd RingHom
 open scoped BigOperators"""
-# 【Header 说明】
-# - import Mathlib: 导入整个 Mathlib 库（包含大量数学定义和定理）
-# - open xxx: 打开命名空间，可以直接使用其中的定义而不需要前缀
-# - open scoped BigOperators: 启用 ∑ 和 ∏ 等大运算符的 notation
+# Header notes
+# - import Mathlib: import the full Mathlib library (definitions + theorems)
+# - open xxx: open namespaces so you can use definitions without prefixes
+# - open scoped BigOperators: enable ∑ and ∏ notations
 
 DEFAULT_GROUND_TRUTH = """
 theorem odd_sq_sub_one_div_eight (n : ℕ) (hn : Odd n) : 8 ∣ n^2 - 1 := by sorry
 """
-# 【Ground Truth 说明】
-# - theorem xxx: 定理名称（命名规范：描述性、下划线分隔）
-# - (n : ℕ): 显式参数，自然数 n
-# - (hn : Odd n): 假设参数，n 是奇数的证明
-# - 8 ∣ n^2 - 1: 结论，8 整除 n²-1
-# - := by sorry: 证明占位符（我们只关心 statement，不需要完整证明）
+# Ground-truth notes
+# - theorem xxx: theorem name (convention: descriptive, snake_case)
+# - (n : ℕ): explicit parameter, a natural number n
+# - (hn : Odd n): hypothesis, a proof that n is odd
+# - 8 ∣ n^2 - 1: conclusion, 8 divides n²-1
+# - := by sorry: proof placeholder (we only care about the statement)
 
 
 # =============================================================================
@@ -115,33 +115,31 @@ theorem odd_sq_sub_one_div_eight (n : ℕ) (hn : Odd n) : 8 ∣ n^2 - 1 := by so
 # =============================================================================
 #
 # NOTE:
-# - 为避免 dataset header 污染，本版本不再把 header 注入任何 prompt。
-# - 模型仍需输出“完整 Lean 文件”（imports + theorem），以便直接编译评估。
+# - To avoid dataset-header contamination, we do not inject dataset headers into prompts.
+# - The model still must output a *complete Lean file* (imports + theorem) so we can compile/evaluate it.
 # =============================================================================
 
 def build_task_sys_msg(informal: str, header: str) -> str:
     """
-    构建 LLM 的任务系统消息。
+    Build the LLM task system message.
 
     NOTE:
-    - 参数 `header` 仅为向后兼容保留（旧接口仍会传入）。
-    - 为避免污染，不再把 dataset header 注入 prompt。
+    - The `header` parameter is kept only for backward compatibility (older call sites still pass it).
+    - To avoid contamination, we do not inject dataset headers into the prompt.
 
-    【Prompt 结构】
-    1. 角色定义：Lean 4 专家
-    2. 任务说明：自然语言 → Lean 4 定理
-    3. 输出协议：
-       - 只输出 Lean statement（不包含 header）
-       - 以 := by sorry 结尾
-    4. 示例：完整的输入输出示例
-    5. 实际任务：用户的 informal 和 header
+    Prompt structure
+    1. Role: Lean 4 expert
+    2. Task: natural language → Lean 4 theorem statement
+    3. Output protocol:
+       - output a complete Lean file (imports + theorem)
+       - end the theorem with `:= by sorry`
 
     Args:
-        informal: 自然语言数学陈述
-        header: Lean4 的 import 和 open 语句
+        informal: natural-language mathematical statement
+        header: Lean 4 header (imports/opens/options); currently unused
 
     Returns:
-        完整的系统消息字符串
+        Full system-message string
     """
     return f"""You are an expert in mathematics and Lean 4 (Mathlib).
 
@@ -164,32 +162,32 @@ Natural language statement:
 
 Return ONLY the Lean code block."""
 # =============================================================================
-# 配置创建
+# Config construction
 # =============================================================================
 #
-# 【配置层次结构】
-# ShinkaEvolve 使用多个配置对象来控制不同方面：
+# Config hierarchy
+# ShinkaEvolve uses multiple config objects to control different aspects:
 #
 # ┌─────────────────┐
-# │  EvolutionConfig │ ← 进化算法参数（代数、并行度、LLM 设置）
+# │  EvolutionConfig │ ← evolution algorithm params (gens, parallelism, LLM settings)
 # └─────────────────┘
 # ┌─────────────────┐
-# │    JobConfig     │ ← 任务执行配置（评估脚本路径）
+# │    JobConfig     │ ← job execution (evaluator entrypoint path)
 # └─────────────────┘
 # ┌─────────────────┐
-# │  DatabaseConfig  │ ← 数据库配置（archive 大小、采样策略）
+# │  DatabaseConfig  │ ← archive DB config (size, sampling)
 # └─────────────────┘
 # ┌─────────────────┐
-# │   RepairConfig   │ ← 修复配置（最大尝试次数、温度）
+# │   RepairConfig   │ ← compile-repair config (attempts, temperature)
 # └─────────────────┘
 # ┌─────────────────┐
-# │  ProblemConfig   │ ← 问题配置（informal、header、ground_truth）
+# │  ProblemConfig   │ ← problem description (for evaluator)
 # └─────────────────┘
 #
-# 【为什么这么多配置？】
-# 1. 关注点分离：每个配置管一件事
-# 2. 默认值合理：大部分情况下不需要修改
-# 3. 灵活扩展：新增配置项不影响现有代码
+# Why so many configs?
+# 1. Separation of concerns: each config controls one dimension
+# 2. Reasonable defaults: most runs shouldn't need to tweak everything
+# 3. Extensibility: adding new knobs doesn't break existing code
 # =============================================================================
 
 def create_configs(
@@ -228,26 +226,26 @@ def create_configs(
     init_program_path: str | None = None,
 ):
     """
-    创建 ShinkaEvolve 所需的所有配置对象。
+    Create all config objects required by ShinkaEvolve.
 
-    【配置对象说明】
-    - evo_config: 控制进化算法的核心参数
-    - job_config: 控制任务执行方式
-    - db_config: 控制 archive 数据库
-    - repair_config: 控制编译修复机制
-    - problem_config: 问题描述（给评估器用）
+    Config objects
+    - evo_config: core evolution-algorithm knobs
+    - job_config: how evaluation jobs are executed
+    - db_config: archive database behavior
+    - repair_config: compile-repair mechanism
+    - problem_config: problem description (consumed by the evaluator)
 
-    【参数说明】
-    - informal: 需要形式化的自然语言数学陈述
-    - header: Lean4 的 import/open 语句（作为上下文）
-    - ground_truth: 标准答案（可选，用于 BEq+ 检查）
-    - use_beq: 是否启用 BEq+ 等价性检查
-    - results_dir: 结果保存目录
-    - num_generations: 进化代数
-    - max_repair_attempts: 最大修复尝试次数
+    Args (high-level)
+    - informal: natural-language statement to formalize
+    - header: Lean 4 header (imports/opens/options)
+    - ground_truth: optional reference statement (for BEq+)
+    - use_beq: enable BEq+ equivalence check
+    - results_dir: output directory for this run
+    - num_generations: number of evolution generations
+    - max_repair_attempts: max compile-repair attempts
 
     Returns:
-        (evo_config, job_config, db_config, repair_config, problem_config) 元组
+        (evo_config, job_config, db_config, repair_config, problem_config) tuple
     """
     import json
 
@@ -256,16 +254,18 @@ def create_configs(
     is_baseline_mode = baseline_mode_norm != "ours"
 
     # =========================================================================
-    # 1. Problem Config（问题配置）
+    # 1. Problem Config
     # =========================================================================
-    # 这个配置会写入文件，供 evaluate.py 读取。
-    # 【为什么要写文件？】
-    # evaluate.py 是作为子进程运行的，不能直接传参数，只能通过文件通信。
+    # This config is written to disk so `evaluate.py` (a subprocess) can load it.
+    #
+    # Why write to a file?
+    # `evaluate.py` is executed as a separate process; we cannot pass a rich object graph
+    # via function args, so file-based communication is the simplest option.
     problem_config = {
-        "informal": informal,      # 自然语言数学陈述
+        "informal": informal,      # natural-language statement
         "header": header,          # Lean4 header（import/open）
-        "ground_truth": ground_truth,  # 标准答案（用于 BEq+）
-        "use_beq": use_beq,        # 是否启用 BEq+ 检查
+        "ground_truth": ground_truth,  # reference statement (for BEq+)
+        "use_beq": use_beq,        # enable BEq+ check
         # Optional: a seed bank directory containing gen_0/seed_i/ programs.
         # When provided, AutoformalizationRunner will reuse these initial programs.
         "init_programs_dir": "",
@@ -310,7 +310,7 @@ def create_configs(
         "score_cycle_weight": float(os.environ.get("AUTOFORMAL_SCORE_CYCLE_WEIGHT", "50")),
         "score_semantic_bonus": float(os.environ.get("AUTOFORMAL_SCORE_SEMANTIC_BONUS", "100")),
         "score_beq_bonus": float(os.environ.get("AUTOFORMAL_SCORE_BEQ_BONUS", "200")),
-        "compile_timeout": 600,     # 编译超时（秒）- 10分钟以容纳复杂定理
+        "compile_timeout": 600,     # compile timeout (seconds) - 10 minutes for harder theorems
         # Lean Server HTTP endpoint (Kimina Lean Server docs: http://localhost:8001/docs)
         "lean_server_url": os.environ.get(
             "LEAN_SERVER_URL", "local"
@@ -369,7 +369,7 @@ def create_configs(
         print(f"[Config] (Legacy) Problem config also saved to {legacy_path}")
 
     # =========================================================================
-    # 2. Repair Config（修复配置）
+    # 2. Repair Config
     # =========================================================================
     # Temperature protocol (repair):
     # - Compile-repair is prone to "no-op / echo" at temperature=0.0.
@@ -383,34 +383,35 @@ def create_configs(
     )
 
     # =========================================================================
-    # 3. Job Config（任务配置）
+    # 3. Job Config
     # =========================================================================
-    # 指定评估脚本的路径。当 ShinkaEvolve 需要评估一个候选时，
-    # 会调用这个脚本：python evaluate.py --program_path xxx --results_dir xxx
+    # Path to the evaluator entrypoint. ShinkaEvolve calls:
+    #   python evaluate.py --program_path xxx --results_dir xxx
     job_config = LocalJobConfig(
         eval_program_path=str(BASE_DIR / "evaluate.py"),
     )
 
     # =========================================================================
-    # 4. Database Config（数据库配置）
+    # 4. Database Config
     # =========================================================================
-    # 控制 archive 的行为。
+    # Controls archive behavior.
     #
-    # 【关键参数解释】
-    # - num_islands: 岛屿数量（并行子种群，可以探索不同方向）
-    # - archive_size: 全局共享的 archive 上限（所有岛共用一份，不是“每岛各自 40”）
-    # - elite_selection_ratio: 精英选择比例（用于 inspiration 选择）
-    # - num_archive_inspirations: 从 archive 采样多少个"灵感"候选
-    # - num_top_k_inspirations: 从 top-k 采样多少个"灵感"候选
-    # - parent_selection_strategy: 父代选择策略
-    #   - "weighted": 按适应度加权采样（好的候选更可能被选中）
-    #   - "uniform": 均匀采样
-    # - parent_selection_lambda: 加权采样的温度参数
+    # Key params
+    # - num_islands: number of islands (parallel sub-populations exploring different directions)
+    # - archive_size: global archive cap (shared across islands; not "per-island")
+    # - elite_selection_ratio: elite selection ratio (for inspiration sampling)
+    # - num_archive_inspirations: inspirations sampled from archive
+    # - num_top_k_inspirations: inspirations sampled from top-k
+    # - parent_selection_strategy: parent selection strategy
+    #   - "weighted": fitness-weighted sampling (better candidates are more likely)
+    #   - "uniform": uniform sampling
+    # - parent_selection_lambda: temperature for weighted sampling
     #
-    # 说明：
-    # - 虽然逻辑上存在多个 island（programs.island_idx），但当前实现的 archive 表是单表，
-    #   `archive_size` 控制的是“全局最多保留多少个 correct program”，并不会对每个 island 单独限制。
-    # - 因此出现 island 不均衡是可能的（某些题目甚至可能出现某个 island 的 archive 为空）。
+    # Notes:
+    # - Although there are multiple islands logically (`programs.island_idx`), the current archive
+    #   implementation is a single shared table. `archive_size` caps the *global* number of retained
+    #   correct programs, not per-island retention.
+    # - Island imbalance can happen (some problems may even have empty archives for some islands).
     #
     # IMPORTANT (for ablations):
     # - Allow env overrides in ours-mode so we can run `num_islands=1 vs 2` without touching code.
@@ -494,9 +495,9 @@ def create_configs(
     )
 
     # =========================================================================
-    # 5. Evolution Config（进化配置）
+    # 5. Evolution Config
     # =========================================================================
-    # 这是最核心的配置，控制进化算法的行为。
+    # This is the core config that controls the evolution algorithm.
     task_sys_msg = build_task_sys_msg(informal, header)
     meta_interval = int(os.environ.get("META_REC_INTERVAL", "10"))
     meta_rec_interval = meta_interval if meta_interval > 0 else None
@@ -584,29 +585,29 @@ def create_configs(
         return max(int(min_value), int(v))
 
     evo_config = EvolutionConfig(
-        # --- Prompt 配置 ---
-        task_sys_msg=task_sys_msg,  # LLM 系统消息
+        # --- Prompt config ---
+        task_sys_msg=task_sys_msg,  # LLM system message
 
-        # --- Patch 类型配置 ---
-        # 【Patch 类型说明】
-        # - "full": 完全重写（从头生成）
-        # - "diff": 差分修改（基于父代微调）
-        # - "cross": 交叉（结合两个父代）
+        # --- Patch-type config ---
+        # Patch types:
+        # - "full": rewrite from scratch
+        # - "diff": local edit based on parent
+        # - "cross": crossover (combine multiple parents)
         patch_types=patch_types_eff,
         patch_type_probs=patch_type_probs_eff,
 
-        # --- 进化参数 ---
+        # --- Evolution parameters ---
         num_generations=num_generations,
-        max_parallel_jobs=int(max_parallel_jobs),  # 并行评估的任务数（外层也可用“多题并行”）
-        max_patch_resamples=_cfg_int("AUTOFORMAL_MAX_PATCH_RESAMPLES", 3),  # 重采样次数（如果生成失败）
-        max_patch_attempts=_cfg_int("AUTOFORMAL_MAX_PATCH_ATTEMPTS", 3),  # 最大尝试次数
+        max_parallel_jobs=int(max_parallel_jobs),  # parallel jobs within a single problem run
+        max_patch_resamples=_cfg_int("AUTOFORMAL_MAX_PATCH_RESAMPLES", 3),  # resamples if generation fails
+        max_patch_attempts=_cfg_int("AUTOFORMAL_MAX_PATCH_ATTEMPTS", 3),  # max attempts per patch
 
-        # --- 任务类型 ---
-        job_type="local",           # 本地执行（vs 分布式）
-        language="lean",            # 代码语言（LLM 输出）
+        # --- Job type ---
+        job_type="local",           # local execution (vs. distributed)
+        language="lean",            # code language (LLM output)
 
-        # --- LLM 配置 ---
-        # 使用框架支持的 OpenAI 模型（见 shinka/llm/models/pricing.py）
+        # --- LLM config ---
+        # Uses the framework's OpenAI(-compatible) model interface (see shinka/llm/models/pricing.py).
         llm_models=llm_models_list,
         # Evolution multi-temperature (sampled per call).
         llm_kwargs=dict(
@@ -616,9 +617,9 @@ def create_configs(
             max_tokens=int(os.environ.get("AUTOFORMAL_LLM_MAX_TOKENS", "2048")),
         ),
 
-        # --- 高级功能 ---
-        # meta_rec_interval: Meta-recommendation 更新间隔（按已评估程序数量触发）。
-        # 默认启用并保持简短（Lean statement 场景更适合短规则）。
+        # --- Advanced features ---
+        # meta_rec_interval: meta-recommendation refresh interval (triggered by evaluated program count).
+        # Enabled by default and kept short (Lean statements benefit from short, concrete rules).
         meta_rec_interval=meta_rec_interval,
         # IMPORTANT: if meta_rec_interval is disabled (None), also disable meta-LLM entirely.
         # Otherwise MetaSummarizer will accumulate all programs and try a huge "final summary"
@@ -631,7 +632,7 @@ def create_configs(
         llm_dynamic_selection="ucb1",
         llm_dynamic_selection_kwargs=dict(exploration_coef=1.0),
 
-        # code_embed_sim_threshold: Novelty 门槛
+        # code_embed_sim_threshold: novelty threshold
         code_embed_sim_threshold=float(code_embed_sim_threshold),
         embedding_model=(embedding_model_eff or None),
         max_novelty_attempts=int(max_novelty_attempts),
@@ -641,7 +642,7 @@ def create_configs(
             max_tokens=int(os.environ.get("AUTOFORMAL_NOVELTY_LLM_MAX_TOKENS", os.environ.get("AUTOFORMAL_LLM_MAX_TOKENS", "2048"))),
         ),
 
-        # --- 文件路径 ---
+        # --- File paths ---
         # Baseline modes should generate independent samples (ignore seed0 file).
         init_program_path=(None if is_baseline_mode else (init_program_path or str(BASE_DIR / "initial.lean"))),
         results_dir=results_dir,
@@ -659,16 +660,16 @@ def create_configs(
 
 
 # =============================================================================
-# Main 函数
+# Main
 # =============================================================================
 #
-# 【执行流程】
-# 1. 解析命令行参数
-# 2. 打印运行信息（方便调试和追溯）
-# 3. 创建所有配置对象
-# 4. 创建 AutoformalizationRunner
-# 5. 运行进化
-# 6. 打印统计信息
+# Execution flow
+# 1. Parse CLI args
+# 2. Print run info (for debugging/auditing)
+# 3. Create configs
+# 4. Create AutoformalizationRunner
+# 5. Run evolution
+# 6. Print stats
 # =============================================================================
 
 def main():
@@ -1046,7 +1047,7 @@ def main():
     if args.mock_statements_path:
         os.environ["AUTOFORMAL_MOCK_STATEMENTS_PATH"] = str(args.mock_statements_path)
 
-    # 如果提供了配置文件，从中加载问题配置
+    # If a config file is provided, load problem fields from it.
     config_data = None
     if args.config:
         import json
@@ -1058,7 +1059,7 @@ def main():
         args.use_beq = config_data.get("use_beq", args.use_beq)
 
     print("=" * 60)
-    print("ShinkaEvolve - Lean4 Autoformalization (规约 v1.2)")
+    print("ShinkaEvolve - Lean4 Autoformalization (spec v1.2)")
     print("=" * 60)
     print(f"Informal: {args.informal[:100]}...")
     print(f"Baseline mode: {args.baseline_mode}")
@@ -1069,12 +1070,12 @@ def main():
     print(f"Repair: {'disabled' if args.disable_repair else f'enabled (max {args.max_repair_attempts} attempts)'}")
     print(f"Budgets: llm_calls={args.max_llm_calls}, evals={args.max_evals}, time={args.max_time_seconds}")
     print(f"Stagnation: {args.stagnation_generations} gens, max_soft_resets={args.max_soft_resets}")
-    print("满足约束: [A] Novelty for compile_ok=1 only（依赖 evaluator/runner 路径）")
-    print("满足约束: [B] Archive compile_ok=1 only")
-    print("满足约束: [C] Repair counts toward budget")
-    print("满足约束: [D] Compile on full {header}+{body}")
-    print("满足约束: [F] compile_ok=0 永远劣于 compile_ok=1")
-    print("满足约束: [G] No dataset header in prompts")
+    print("Meets constraints: [A] Novelty for compile_ok=1 only (enforced in evaluator/runner path)")
+    print("Meets constraints: [B] Archive keeps compile_ok=1 only")
+    print("Meets constraints: [C] Repair counts toward budget")
+    print("Meets constraints: [D] Compile on full {header}+{body}")
+    print("Meets constraints: [F] compile_ok=0 always ranks below compile_ok=1")
+    print("Meets constraints: [G] No dataset header in prompts")
     print("=" * 60)
 
     novelty_llm_models_raw = str(args.novelty_llm_models or "").strip()

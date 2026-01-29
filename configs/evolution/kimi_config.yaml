@@ -1,4 +1,4 @@
-# 针对Kimi API的优化配置
+# Optimized configuration for Kimi-style API endpoints.
 evo_config:
   _target_: shinka.core.EvolutionConfig
   patch_types:
@@ -12,7 +12,7 @@ evo_config:
   max_patch_resamples: 2
   max_patch_attempts: 5
   llm_models:
-    - "claude-sonnet-4-5-20250929"  # 使用Claude模型通过Kimi API
+    - "claude-sonnet-4-5-20250929"  # Use a Claude model via a Kimi-compatible endpoint
   llm_dynamic_selection: null
   llm_kwargs:
     temperatures:

@@ -1,12 +1,12 @@
 """
 Baseline Methods for Autoformalization Experiment.
 
-按照 要求.md 实现三种方法 (统一 12 次 LLM 调用预算):
-1. Naive best-of-N sampling: 一次性采样 12 个 candidate
-2. Rewrite-only: 初代 4 个 + 2 轮 rewrite, 每轮 4 个 → 4 + 2×4 = 12
-3. Evolution: 初代 4 个 + 2 轮 evolution, 每轮 4 个 offspring → 4 + 2×4 = 12
+Implements three methods under a unified 12-call budget (original experimental protocol):
+1. Naive best-of-N sampling: sample 12 candidates in one shot.
+2. Rewrite-only: 4 initial + 2 rewrite rounds × 4 = 12.
+3. Evolution: 4 initial + 2 evolution rounds × 4 offspring = 12.
 
-实验结果记录:
+Recorded result fields:
 - naive_soft_success: compile_ok == True and s_sem == 1
 - naive_strict_success: compile_ok == True and beq_flag == 1
 """
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# LLM Call Counter (统一预算追踪)
+# LLM Call Counter (unified budget tracking)
 # ============================================================================
 
 _llm_call_count = 0
@@ -171,14 +171,14 @@ def generate_candidate(
 
 def _format_parent_summary(p: Candidate, idx: int, lambda_beq: float) -> str:
     """
-    格式化单个 parent 的摘要，结构化地呈现其优缺点。
+    Format a single parent's summary, highlighting strengths/weaknesses.
 
-    格式设计原则：
-    1. 状态一目了然：COMPILED vs COMPILE_FAILED
-    2. 语义结果明确：CORRECT vs INCORRECT vs N/A
-    3. 明确指出 strengths 和 weaknesses，帮助 LLM 做 crossover
+    Design goals:
+    1. Status is glanceable: COMPILED vs COMPILE_FAILED
+    2. Semantic outcome is explicit: CORRECT vs INCORRECT vs N/A
+    3. Provide strengths and weaknesses to help the LLM perform crossover
     """
-    # 状态标签
+    # Status tags
     if p.compile_ok:
         compile_status = "COMPILED"
         semantic_status = "CORRECT" if p.s_sem == 1 else "INCORRECT"
@@ -190,7 +190,7 @@ def _format_parent_summary(p: Candidate, idx: int, lambda_beq: float) -> str:
 
     reward = p.reward(lambda_beq)
 
-    # 构建 header 行
+    # Header line
     header_line = (
         f"[Parent {idx}] "
         f"Syntax: {compile_status} | "
@@ -199,17 +199,17 @@ def _format_parent_summary(p: Candidate, idx: int, lambda_beq: float) -> str:
         f"Reward: {reward:.2f}"
     )
 
-    # 代码块
+    # Code block
     code_block = f"```lean\n{p.code.strip()}\n```"
 
-    # 错误/反馈信息
+    # Error/feedback section
     feedback_section = ""
     if not p.compile_ok and p.compile_error:
         feedback_section = f"\nCompilation Error:\n{_truncate(p.compile_error, 300)}"
     elif p.compile_ok and p.s_sem == 0 and p.critic_raw:
         feedback_section = f"\nSemantic Issue:\n{_truncate(p.critic_raw, 300)}"
 
-    # 优缺点分析（帮助 LLM 理解如何利用这个 parent）
+    # Strength/weakness analysis (to help the LLM use this parent effectively)
     strengths = []
     weaknesses = []
 
@@ -241,10 +241,10 @@ def generate_evolved_candidate(
     """
     Generate evolved candidate from multiple parents (crossover).
 
-    核心思想：
-    - 不是简单的"取 A 的一部分 + B 的一部分"
-    - 而是让 LLM 从不同类型的成功和失败中学习
-    - 语法对的 parent 提供结构，语义对的 parent 提供含义
+    Core idea:
+    - Not a naive "take parts of A + parts of B"
+    - Let the LLM learn from both successes and failures across parents
+    - Syntactically-correct parents provide structure; semantically-correct parents provide meaning
     """
     parent_summaries = [
         _format_parent_summary(p, i, config.lambda_beq)
@@ -279,12 +279,12 @@ class Archive:
     max_size: int = 100
     lambda_beq: float = 0.5
 
-    # 修改后版本：在 Archive 内维护 usage，避免侵入 models.py
+    # Maintain usage counters inside the archive (keeps models.py clean).
     usage_map: Dict[str, int] = field(default_factory=dict)
 
     def add(self, candidate: Candidate):
         """Add candidate to archive."""
-        # exact-match 去重（小预算下重复 = 直接浪费）
+        # Exact-match deduplication (duplicates are wasted budget under small budgets).
         existing = {c.code.strip() for c in self.candidates}
         if candidate.code.strip() in existing:
             return
@@ -293,7 +293,7 @@ class Archive:
         self.candidates.sort(key=lambda c: c.reward(self.lambda_beq), reverse=True)
         self.candidates = self.candidates[:self.max_size]
 
-        # 修改后版本：新加入的 candidate 初始化 usage
+        # Initialize usage for new candidates.
         if candidate.candidate_id not in self.usage_map:
             self.usage_map[candidate.candidate_id] = 0
 
@@ -317,7 +317,7 @@ class Archive:
             valid = self.candidates
         return valid[:k]
 
-    # 修改前版本：纯 top-k 贪婪，会导致 parent collapse
+    # Previous version: pure top-k greedy sampling can cause parent collapse.
     # def sample_parents(self, k: int) -> List[Candidate]:
     #     """Sample k parents for evolution."""
     #     compiled = [c for c in self.candidates if c.compile_ok]
@@ -327,7 +327,7 @@ class Archive:
     #     # If not enough compiled, include non-compiled
     #     return self.candidates[:k]
 
-    # 修改后版本：Evolution v2 专用采样（非贪婪 + usage penalty + 强制 diversity）
+    # Evolution v2 sampling (non-greedy + usage penalty + enforced diversity).
     def sample_two_parents_v2(
         self,
         top_k: int = 10,
@@ -335,63 +335,63 @@ class Archive:
         beta: float = 0.3,
     ) -> List[Candidate]:
         """
-        采样两个父代用于 crossover：
-        - parent1：从 top-K compiled 中按 exp(alpha * reward_norm) * exp(-beta * usage) 采样（偏 exploitation）
-        - parent2：从剩余 compiled 中均匀随机采样（偏 exploration），并保证 parent2 != parent1
+        Sample two parents for crossover:
+        - parent1: sample from top-K compiled by exp(alpha * reward_norm) * exp(-beta * usage) (exploitation)
+        - parent2: sample uniformly from the remaining compiled set (exploration), ensuring parent2 != parent1
         """
         import math
 
         compiled = [c for c in self.candidates if c.compile_ok]
         if not compiled:
-            # 没有 compiled 的时候，退化返回空，让上层跳过/处理
+            # No compiled candidates: return empty so the caller can skip/fallback.
             return []
 
         if len(compiled) == 1:
-            # 只有一个父代时，上层会 fallback 到 rewrite
+            # Only one parent available: caller may fall back to rewrite.
             return [compiled[0]]
 
-        # candidates 已按 reward 排过序，但这里仍然显式构造 top 列表
+        # Candidates are already sorted by reward, but we still take an explicit top list.
         top = compiled[: min(top_k, len(compiled))]
 
-        # 归一化 reward，避免尺度问题（reward ∈ {0,1,1+lambda} 也可，但仍然规范化）
+        # Normalize rewards to avoid scale issues.
         rewards = [c.reward(self.lambda_beq) for c in top]
         max_r = max(rewards) if rewards else 0.0
         norm_rewards = [r / max_r if max_r > 0 else 0.0 for r in rewards]
 
-        # 计算采样权重：reward 越高越容易被选中，但 usage 越多越被惩罚
+        # Sampling weights: higher reward => more likely; higher usage => more penalized.
         weights = []
         for c, r in zip(top, norm_rewards):
             u = self.usage_map.get(c.candidate_id, 0)
             w = math.exp(alpha * r) * math.exp(-beta * u)
             weights.append(w)
 
-        # 防止数值问题
+        # Guard numerical issues.
         total_w = sum(weights)
         if total_w <= 0:
             probs = [1.0 / len(top)] * len(top)
         else:
             probs = [w / total_w for w in weights]
 
-        # 按权重采样 parent1
+        # Sample parent1 by weight.
         idx1 = random.choices(range(len(top)), weights=probs, k=1)[0]
         p1 = top[idx1]
 
-        # parent2：两级 fallback（exploration ≠ 把垃圾丢进 crossover）
-        # 优先：reward > 0 的 compiled（至少 semantic 对过）
+        # parent2: two-level fallback (exploration ≠ injecting junk into crossover)
+        # Prefer compiled candidates with reward > 0 (at least semantically correct).
         pool2 = [
             c for c in compiled
             if c.candidate_id != p1.candidate_id and c.reward(self.lambda_beq) > 0
         ]
-        # 如果太少，再退回到所有 compiled
+        # If too few, fall back to all compiled.
         if not pool2:
             pool2 = [c for c in compiled if c.candidate_id != p1.candidate_id]
         if not pool2:
-            # 极端保护：如果 pool2 为空，就退化返回单父
+            # Extreme guard: if pool2 is empty, return a single parent.
             return [p1]
 
         p2 = random.choice(pool2)
 
-        # 更新 usage
+        # Update usage counts.
         self.usage_map[p1.candidate_id] = self.usage_map.get(p1.candidate_id, 0) + 1
         self.usage_map[p2.candidate_id] = self.usage_map.get(p2.candidate_id, 0) + 1
 
@@ -404,9 +404,9 @@ class Archive:
 
 async def run_naive(problem: Problem, config: Config) -> Candidate:
     """
-    Naive baseline: 一次性采样 N 个 candidate, 选最好的。
+    Naive baseline: sample N candidates in one shot and pick the best.
 
-    预算: N = 12 次 LLM 调用
+    Budget: N = 12 LLM calls.
     """
     logger.info(f"[Naive] Running for {problem.id} (N={config.naive_n})")
 
@@ -442,9 +442,9 @@ async def run_naive(problem: Problem, config: Config) -> Candidate:
 
 async def run_rewrite(problem: Problem, config: Config) -> Candidate:
     """
-    Rewrite-only baseline: 单条链 self-refine (ATF-style)。
+    Rewrite-only baseline: a single-chain self-refine (ATF-style).
 
-    预算: 初代 4 个 + 2 轮 rewrite, 每轮 4 个 → 4 + 2×4 = 12
+    Budget: 4 initial + 2 rewrite rounds × 4 = 12.
     """
     logger.info(f"[Rewrite] Running for {problem.id}")
     logger.info(f"  Init={config.rewrite_init}, Rounds={config.rewrite_rounds}, "
@@ -532,7 +532,7 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
     """
     Population Evolution: LLM-guided population evolution (Shinka-style)。
 
-    预算: 初代 4 个 + 2 轮 evolution, 每轮 4 个 offspring → 4 + 2×4 = 12
+    Budget: 4 initial + 2 evolution rounds × 4 offspring = 12.
     """
     logger.info(f"[Evolution] Running for {problem.id}")
     logger.info(f"  Init={config.evolve_init}, Rounds={config.evolve_rounds}, "
@@ -555,27 +555,27 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
     evaluated = await batch_evaluate(init_candidates, problem, config)
     archive.add_all(evaluated)
 
-    # 记录 parent pairing 多样性（用于验证 evolution 行为）
+    # Track parent pairing diversity (helps verify evolution behavior).
     parent_pairs = set()
-    parent_pair_counter = Counter()  # 统计每个 pair 被采样的次数
+    parent_pair_counter = Counter()  # number of times each pair is sampled
 
     # Evolution rounds
     for round_num in range(1, config.evolve_rounds + 1):
         logger.info(f"  Round {round_num}/{config.evolve_rounds}")
 
-        # 修改前版本：一轮只采一次 parents + 偶数 rewrite/奇数 crossover → 退化
+        # Previous version: sample parents once per round + alternating rewrite/crossover => degraded.
         # num_parents = min(2, len(archive.candidates))
         # parents = archive.sample_parents(num_parents)
         # if not parents:
         #     logger.warning("  No parents available, skipping round")
         #     continue
 
-        # 修改后版本：每个 offspring 都重新采样 parents（避免 collapse）
+        # Current version: re-sample parents for each offspring (avoids collapse).
         new_candidates = []
         for i in range(config.evolve_offspring):
             logger.info(f"    Offspring {i+1}/{config.evolve_offspring}")
 
-            # 修改后版本：每个 offspring 都重新采样 parents
+            # Re-sample parents for each offspring.
             parents = archive.sample_two_parents_v2(
                 top_k=10,
                 alpha=3.0,
@@ -587,7 +587,7 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
                 continue
 
             if len(parents) == 1:
-                # 只有一个 parent 时 fallback 到 rewrite（这是唯一允许退化的情况）
+                # Only one parent: fall back to rewrite (the only allowed degeneration case).
                 parent = parents[0]
                 MAX_FB_CHARS = 300
                 if not parent.compile_ok and parent.compile_error:
@@ -611,8 +611,8 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
                     feedback=feedback
                 )
             else:
-                # 正常情况：100% 多亲 crossover（EVOLUTION_PROMPT）
-                # 记录 parent pair（用于验证多样性）
+                # Normal case: multi-parent crossover (EVOLUTION_PROMPT).
+                # Record the parent pair (for diversity audits).
                 pair = tuple(sorted(p.candidate_id for p in parents))
                 parent_pairs.add(pair)
                 parent_pair_counter[pair] += 1
@@ -626,7 +626,7 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
 
             new_candidates.append(cand)
 
-        # Evaluate（添加空列表防御性检查）
+        # Evaluate (defensive empty-list check).
         if new_candidates:
             evaluated = await batch_evaluate(new_candidates, problem, config)
             archive.add_all(evaluated)
@@ -643,7 +643,7 @@ async def run_evolution(problem: Problem, config: Config) -> Candidate:
         else:
             logger.warning(f"  Round {round_num}: no offspring generated, skipping evaluation")
 
-        # Log parent pairing 多样性
+        # Log parent pairing diversity
         top_pairs = parent_pair_counter.most_common(3)
         logger.info(
             f"  Round {round_num}: unique_pairs={len(parent_pairs)}, "

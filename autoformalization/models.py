@@ -46,18 +46,18 @@ class Candidate:
     """
     A candidate Lean4 formalization.
 
-    Evaluation fields (按照 要求.md 定义):
-    - compile_ok: bool, Lean4 编译是否通过 (硬约束)
-    - compile_error: Optional[str], 编译错误信息
-    - s_sem: int, CriticLean 语义一致性 (0 或 1)
-    - beq_flag: int, BEq+ 等价性 (0 或 1)
-    - critic_raw: str, CriticLean 原始响应
+    Evaluation fields (experiment protocol):
+    - compile_ok: whether Lean elaboration succeeds (hard gate)
+    - compile_error: compilation error message (if any)
+    - s_sem: CriticLean semantic consistency (0 or 1)
+    - beq_flag: BEq+ equivalence (0 or 1)
+    - critic_raw: raw CriticLean response
 
-    Reward 定义:
-    - 如果 compile_ok == False: reward = 0.0
-    - 否则: reward = s_sem + lambda_beq * beq_flag
+    Reward:
+    - If compile_ok is False: reward = 0.0
+    - Otherwise: reward = s_sem + lambda_beq * beq_flag
 
-    Success 定义:
+    Success:
     - soft_success: compile_ok == True and s_sem == 1
     - strict_success: compile_ok == True and beq_flag == 1
     """

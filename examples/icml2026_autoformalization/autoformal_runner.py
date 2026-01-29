@@ -2,38 +2,40 @@
 AutoformalizationRunner: ShinkaEvolve runner with repair_queue support.
 
 ================================================================================
-                              设计理念概述
+                              Design overview
 ================================================================================
 
-本文件是 autoformalization 系统的"进化主循环"，负责协调整个进化搜索过程。
+This file implements the main evolution loop for the autoformalization system.
 
-【为什么需要自定义 Runner？】
-ShinkaEvolve 的默认 EvolutionRunner 会把所有评估完的程序都存入 archive，
-但我们的规约要求：
-- compile_ok=0 的候选不能入 archive（约束 B）
-- compile_ok=0 的候选要进行修复尝试（repair）
-- 修复调用要计入预算（约束 C）
+Why a custom runner?
+The default ShinkaEvolve EvolutionRunner archives every evaluated program, but our
+protocol requires:
+- compile_ok=0 candidates must not enter the archive (Constraint B)
+- compile_ok=0 candidates should get repair attempts
+- repair calls count toward the LLM call budget (Constraint C)
 
-所以我们创建 AutoformalizationRunner，继承 EvolutionRunner 并重写关键方法。
+Therefore we implement AutoformalizationRunner as a subclass of EvolutionRunner and
+override key methods.
 
-【核心设计思想】
-1. 编译失败 ≠ 直接丢弃，而是给予修复机会（最多 2 次）
-2. 修复成功后重新评估，再决定是否入库
-3. 所有候选的"命运"最终都会被记录（成功入库 or 失败记录）
+Key ideas:
+1. Compilation failure is not an immediate discard; we allow a small number of repairs.
+2. If a repair succeeds, we re-evaluate and then decide whether to archive.
+3. Every candidate's outcome is recorded (archived vs failure log).
 
-【约束满足】
-- [A] Novelty only for compile_ok=1: 只有编译成功的候选才参与 novelty 检查
-- [B] Archive only compile_ok=1: 只有编译成功的候选才存入 archive
-- [C] Repair counts toward budget: 修复调用计入 LLM 调用预算
-- [E] Semantic repair（可选）: 仅当 compile_ok=1 & semantic_ok=0 时触发，且计入 LLM 调用预算
+Constraint mapping:
+- [A] Novelty only for compile_ok=1: only compile-ok candidates undergo novelty checks
+- [B] Archive only compile_ok=1: only compile-ok candidates are stored in the archive
+- [C] Repair counts toward budget: repair calls are debited to the call budget
+- [E] Semantic repair (optional): triggered only when compile_ok=1 & semantic_ok=0 and
+  also counts toward the call budget
 
 ================================================================================
-                              规约版本: v1.2
+                              Protocol version: v1.2
 ================================================================================
 """
 
 # =============================================================================
-# 标准库导入
+# Standard library imports
 # =============================================================================
 import json
 import hashlib
@@ -49,11 +51,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # =============================================================================
-# ShinkaEvolve 核心模块导入
+# ShinkaEvolve core imports
 # =============================================================================
-# EvolutionRunner: 进化主循环的基类，我们继承它来添加 repair 逻辑
-# EvolutionConfig: 进化算法的配置
-# RunningJob: 表示一个正在运行的评估任务
+# EvolutionRunner: base class for the evolution loop (we extend it with repair logic)
+# EvolutionConfig: evolution algorithm configuration
+# RunningJob: a running evaluation job
 from shinka.core.runner import (
     EvolutionRunner,
     EvolutionConfig,
@@ -61,20 +63,20 @@ from shinka.core.runner import (
     FOLDER_PREFIX,
     _lean_local_diff_stats,
 )
-# DatabaseConfig: 数据库配置
-# Program: 数据库中存储的程序对象
+# DatabaseConfig: database configuration
+# Program: stored program object
 from shinka.database import DatabaseConfig, Program
-# JobConfig: 任务配置
+# JobConfig: job configuration
 from shinka.launch import JobConfig
-# extract_between: 从文本中提取代码块的工具函数
+# extract_between: helper to extract code blocks from text
 from shinka.llm import extract_between
 from placeholder_guard import is_trivial_tautology_placeholder
 
-# 模型适配层：用于解析不同模型的输出格式
+# Model adapter layer: parse outputs from different model families.
 try:
     from model_adapters import get_model_adapter, is_kimina_model
 except ImportError:
-    # 如果 model_adapters 不可用，使用空实现
+    # If model_adapters is unavailable, fall back to no-op stubs.
     def get_model_adapter(model_name):
         return None
     def is_kimina_model(model_name):
@@ -179,32 +181,24 @@ def _read_metrics_json(results_dir: str) -> Dict[str, Any]:
 
 
 # =============================================================================
-# 配置类
+# Configuration
 # =============================================================================
 
 @dataclass
 class RepairConfig:
     """
-    Compile Repair 的配置。
+    Compile-repair configuration.
 
-    【设计决策】
-    - max_repair_attempts = 2: 最多修复 2 次，避免无限循环
-    - repair_temperature = 0.7: 修复时用中等温度，减少 "no-op / 复读输入" 的重复尝试
-    - enabled = True: 默认启用，但可通过 CLI 的 --disable_repair 关闭（用于调试）
-
-    【为什么是 2 次？】
-    - 太少（1次）：可能错过简单的修复机会
-    - 太多（>3次）：浪费 token，且连续失败说明问题可能不是简单的语法错误
-
-    【何时关闭修复？】
-    - 调试评估器时，避免修复逻辑干扰
-    - 对比实验时，测试"有/无修复"的效果差异
+    Design notes:
+    - max_repair_attempts defaults to 2 to avoid infinite loops.
+    - repair_temperature uses a moderate temperature to reduce no-op retries.
+    - enabled can be turned off via CLI for debugging/ablations.
     """
     # How many initial candidates to try at generation 0 (fixed strategy A).
     num_init_candidates_gen0: int = 3
 
     # Default compile-repair budget for gen>=1.
-    # SPEC v1.0: Generation ≥ 1最多 2 次。
+    # SPEC v1.0: for generation >= 1, allow at most 2 repair attempts.
     max_repair_attempts: int = 2
     # Allow a larger budget for generation 0 bootstrapping.
     # Rationale: Lean4 statements often start non-compiling; a few extra repair
@@ -217,25 +211,25 @@ class RepairConfig:
 @dataclass
 class TerminationConfig:
     """
-    终止策略的配置。
+    Termination policy configuration.
 
-    【两种终止类型】
-    1. Budget Exhausted (硬停): 资源用尽，必须停止
-       - max_llm_calls: LLM 调用次数上限
-       - max_evals: 评估次数上限
-       - max_time_seconds: 运行时间上限
+    Two types of termination:
+    1) Budget exhausted (hard stop): resources are depleted
+       - max_llm_calls: generator call budget
+       - max_evals: evaluation budget
+       - max_time_seconds: wall-clock time limit
 
-    2. Exploration Stagnation (软停): 探索停滞，触发策略调整
-       - stagnation_generations: 连续多少代没有改进
-       - 触发后会尝试"软重置"（提高温度、增加 crossover 概率）
-       - 如果多次软重置仍无改进，才真正停止
+    2) Exploration stagnation (soft stop): no progress for a while
+       - stagnation_generations: number of generations without improvement
+       - triggers a "soft reset" (e.g., more diversity / crossover)
+       - after too many soft resets, the run stops
     """
-    # Budget limits (硬停)
+    # Budget limits (hard stop)
     max_llm_calls: Optional[int] = None
     max_evals: Optional[int] = None
     max_time_seconds: Optional[float] = None
 
-    # Stagnation detection (软停)
+    # Stagnation detection (soft stop)
     stagnation_generations: int = 5
     max_soft_resets: int = 3
 
@@ -251,21 +245,22 @@ class TerminationConfig:
 @dataclass
 class RepairQueueItem:
     """
-    Repair Queue 中的一个项目。
+    One item in the repair queue.
 
-    当一个候选编译失败时，它不会被直接丢弃，而是进入这个队列等待修复。
+    When a candidate fails compilation it is not immediately discarded; instead it can be
+    repaired and re-evaluated.
 
-    【字段说明】
-    - program_id: 唯一标识符
-    - exec_fname: 原始程序文件路径
-    - results_dir: 结果保存目录
-    - generation: 来自哪一代
-    - parent_id: 父代程序 ID（用于追溯）
-    - compile_error_type: 错误类型（用于 repair prompt）
-    - compile_error_msg: 错误信息（用于 repair prompt）
-    - original_code: 原始的 Lean 代码（应包含 imports + theorem）
-    - repair_attempts: 已尝试修复的次数
-    - total_repair_cost: 修复过程中消耗的 API 成本
+    Field notes:
+    - program_id: unique identifier
+    - exec_fname: path to the program file
+    - results_dir: output directory
+    - generation: originating generation
+    - parent_id: parent program id (for tracing)
+    - compile_error_type: error type (used for repair prompt)
+    - compile_error_msg: error message (used for repair prompt)
+    - original_code: original Lean code (should contain imports + theorem)
+    - repair_attempts: number of repair attempts so far
+    - total_repair_cost: accumulated API cost during repair
     """
     program_id: str
     exec_fname: str
@@ -281,25 +276,24 @@ class RepairQueueItem:
 
 
 # =============================================================================
-# Failure Buffer (约束 B 的实现)
+# Failure Buffer (Constraint B)
 # =============================================================================
 
 @dataclass
 class FailureRecord:
     """
-    失败记录。
+    A failure record.
 
-    【设计目的】
-    规约约束 B 要求：compile_ok=0 的候选不入 archive，但我们仍然需要记录它们，
-    用于：
-    1. 统计分析：了解失败的分布和原因
-    2. 经验提取：未来可能用于改进 prompt 或训练数据
-    3. 调试：追溯问题
+    Constraint B requires that compile_ok=0 candidates do not enter the archive, but we
+    still record them for:
+    1) analysis (failure distribution / causes)
+    2) future prompt/data improvements
+    3) debugging and traceability
 
-    【final_status 取值】
-    - "repair_success": 修复成功，已转入 archive
-    - "repair_exhausted": 修复次数用尽，仍然失败
-    - "no_repair": 未启用修复，直接记录失败
+    final_status values:
+    - "repair_success": repair succeeded; candidate moved into the archive
+    - "repair_exhausted": repairs exhausted and still failing
+    - "no_repair": repair disabled; failure recorded directly
     """
     program_id: str
     generation: int
@@ -314,32 +308,30 @@ class FailureRecord:
 
 class FailureBuffer:
     """
-    失败候选的缓冲区。
+    Buffer for failed candidates.
 
-    【约束 B 的实现】
-    compile_fail 只记录到 failure_buffer，不参与 parent sampling。
-
-    这个类维护所有失败候选的记录，并提供统计功能。
+    Implements Constraint B: compile failures are recorded here and never participate
+    in parent sampling.
     """
 
     def __init__(self, buffer_path: Optional[str] = None):
         """
-        初始化 FailureBuffer。
+        Initialize the failure buffer.
 
         Args:
-            buffer_path: 保存路径。如果提供，每次添加记录时会自动保存到文件。
+            buffer_path: Optional JSON path. If set, writes on every update.
         """
         self.records: List[FailureRecord] = []
         self.buffer_path = buffer_path
 
     def add(self, record: FailureRecord):
-        """添加一条失败记录，并自动保存。"""
+        """Add a failure record (and auto-save if configured)."""
         self.records.append(record)
         if self.buffer_path:
             self._save()
 
     def _save(self):
-        """保存到 JSON 文件。"""
+        """Write the buffer to a JSON file."""
         if not self.buffer_path:
             return
         data = [
@@ -348,7 +340,7 @@ class FailureBuffer:
                 "generation": r.generation,
                 "compile_error_type": r.compile_error_type,
                 "compile_error_msg": r.compile_error_msg,
-                "statement": r.statement[:500],  # 截断以节省空间
+                "statement": r.statement[:500],  # truncate to save space
                 "repair_attempts": r.repair_attempts,
                 "repair_llm_calls_used": int(getattr(r, "repair_llm_calls_used", 0) or 0),
                 "final_status": r.final_status,
@@ -361,14 +353,14 @@ class FailureBuffer:
 
     def get_stats(self) -> Dict[str, Any]:
         """
-        获取统计信息。
+        Get summary statistics.
 
-        返回:
-            - total: 总记录数
-            - repair_success: 修复成功的数量
-            - repair_exhausted: 修复失败的数量
-            - no_repair: 未修复的数量
-            - error_types: 各错误类型的分布
+        Returns:
+            - total: total records
+            - repair_success: number of repair-success cases
+            - repair_exhausted: number of repair-exhausted cases
+            - no_repair: number of cases without repair
+            - error_types: distribution of compile error types
         """
         if not self.records:
             return {"total": 0}
@@ -391,7 +383,7 @@ class FailureBuffer:
 
 
 # =============================================================================
-# Repair Prompt 构建
+# Repair prompt construction
 # =============================================================================
 
 LEAN_DECL_KEYWORDS = [
@@ -415,7 +407,7 @@ LEAN_DECL_KEYWORDS = [
 
 def remove_lean_comments(text: str) -> str:
     """
-    移除 Lean 注释（单行和多行）。
+    Remove Lean comments (single-line and block).
     """
     text = re.sub(r"/-(.|\n)*?-/\s*", "", text)
     text = "\n".join([line.split("--")[0].rstrip() for line in text.splitlines()])
@@ -423,7 +415,7 @@ def remove_lean_comments(text: str) -> str:
 
 
 def strip_header_lines(text: str) -> str:
-    """移除 import/open/open scoped 行，避免 header 重复。"""
+    """Strip import/open/open scoped lines to avoid header duplication."""
     cleaned = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -438,7 +430,7 @@ def strip_header_lines(text: str) -> str:
 
 
 def strip_evolve_markers(text: str) -> str:
-    """移除 EVOLVE-BLOCK 标记行。"""
+    """Strip EVOLVE-BLOCK marker lines."""
     cleaned = []
     for line in text.splitlines():
         if re.match(r"^\s*(?:#|//|--)?\s*EVOLVE-BLOCK-(?:START|END)\s*$", line):
@@ -448,10 +440,10 @@ def strip_evolve_markers(text: str) -> str:
 
 
 def extract_first_declaration(text: str) -> str:
-    """提取第一条 Lean 顶层声明。
+    """Extract the first top-level Lean declaration.
 
-    【修复】当找不到声明时返回空字符串而非原始文本，
-    避免 'none' 等无效输出被当作有效 statement 流转。
+    Fix: when no declaration is found, return an empty string instead of the raw text,
+    so placeholders like 'none' are not treated as valid statements downstream.
     """
     if not text:
         return ""
@@ -465,7 +457,7 @@ def extract_first_declaration(text: str) -> str:
             decl_idx = i
             break
     if decl_idx is None:
-        return ""  # 【修复】找不到声明时返回空字符串
+        return ""  # Fix: return empty string when no declaration is found.
     start = decl_idx
     while start > 0 and lines[start - 1].lstrip().startswith("@["):
         start -= 1
@@ -479,14 +471,14 @@ def extract_first_declaration(text: str) -> str:
 
 
 def normalize_lean_statement(text: str) -> str:
-    """清理模型输出并抽取可编译的 Lean statement。
+    """Normalize a model response into a compilable Lean statement.
 
-    【修复】增加占位符过滤，阻断 'none' 等无效输出。
+    Fix: filter common placeholders to block invalid "no result" outputs like 'none'.
     """
     if not text:
         return ""
 
-    # 【修复】过滤常见占位符（模型可能输出这些作为"无结果"标记）
+    # Fix: filter common placeholders (models sometimes emit these as "no result" markers).
     INVALID_PLACEHOLDERS = {"none", "null", "nil", "n/a", "na", ""}
     text_lower = text.strip().lower()
     if text_lower in INVALID_PLACEHOLDERS:
@@ -497,7 +489,7 @@ def normalize_lean_statement(text: str) -> str:
     cleaned = strip_evolve_markers(cleaned)
     result = extract_first_declaration(cleaned)
 
-    # 【修复】再次检查结果是否为占位符
+    # Fix: re-check the extracted statement for placeholders.
     if result and result.strip().lower() in INVALID_PLACEHOLDERS:
         return ""
 
@@ -851,32 +843,33 @@ def build_repair_prompt(
     reference_header: str = "",
 ) -> tuple[str, str]:
     """
-    构建 repair prompt。
+    Build a compilation-repair prompt.
 
-    【设计目的】
-    当编译失败时，我们需要让 LLM 修复错误。这个函数构建修复用的 prompt。
+    Motivation:
+    When compilation fails, we ask the LLM to repair the errors. This helper constructs
+    the repair prompt.
 
-    【Prompt 设计原则】
-    1. 提供完整上下文：header、informal、原始 statement
-    2. 明确错误信息：error_type 和 error_msg
-    3. 限制修复范围：强调"只修复编译错误，不改变数学含义"
+    Prompt design principles
+    1. Provide full context: informal statement + current Lean code (imports + theorem)
+    2. Provide explicit compiler feedback: error_type and error_msg
+    3. Constrain the scope: "fix compilation only; do not change mathematical meaning"
 
-    【为什么要强调"不改变数学含义"？】
-    如果 LLM 在修复时大幅修改 statement，可能会：
-    - 改变定理的数学含义
-    - 引入新的语义错误
-    - 导致搜索偏离正确方向
+    Why emphasize "do not change meaning"?
+    If the LLM makes large edits while repairing, it may:
+    - change the mathematical meaning
+    - introduce new semantic errors
+    - push the search away from correct regions
 
-    所以我们明确限制：只做最小必要的修复。
+    Therefore we explicitly constrain the repair to minimal necessary compilation fixes.
 
     Args:
-        original_code: 原始的 Lean 代码（有编译错误；应包含 imports + theorem）
-        compile_error_type: 错误类型（如 type_mismatch）
-        compile_error_msg: 错误信息
-        informal: 自然语言描述（用于参考）
+        original_code: the original Lean code with compile errors (imports + theorem)
+        compile_error_type: coarse error category (e.g., type_mismatch)
+        compile_error_msg: compiler error message
+        informal: natural-language statement (semantic target)
 
     Returns:
-        (system_message, user_message) 元组
+        (system_message, user_message) tuple
     """
     sys_msg = """You are an expert in Lean 4 theorem proving and Mathlib.
 
@@ -1032,28 +1025,28 @@ def _extract_accuracy_confirmation_from_critic_raw(reasons: str) -> str:
 
 class AutoformalizationRunner(EvolutionRunner):
     """
-    扩展的 EvolutionRunner，支持 repair_queue。
+    Extended EvolutionRunner with a repair_queue.
 
     ================================================================================
-                              这是进化主循环的"大脑"
+                        This is the "brain" of the evolution loop
     ================================================================================
 
-    【继承关系】
-    AutoformalizationRunner → EvolutionRunner → (ShinkaEvolve 核心)
+    Inheritance
+    AutoformalizationRunner → EvolutionRunner → (ShinkaEvolve core)
 
-    【重写的关键方法】
-    - _process_completed_job(): 处理评估完成的候选，添加 repair 逻辑
+    Key overridden methods
+    - _process_completed_job(): process completed evaluations and add repair logic
 
-    【新增功能】
-    1. repair_queue: 管理需要修复的候选
-    2. failure_buffer: 记录所有失败的候选
-    3. termination logic: 失败分类和终止策略
+    Added features
+    1. repair_queue: manage candidates that need repair
+    2. failure_buffer: record all failed candidates
+    3. termination logic: failure categorization and termination strategy
 
-    【约束满足】
-    - [A] Novelty only for compile_ok=1: 在 _process_completed_job 中实现
-    - [B] Archive only compile_ok=1: 在 _process_completed_job 中实现
-    - [C] Repair counts toward budget: 在 _process_repair 中实现
-    - [E] Semantic repair（可选）: 对 compile_ok=1 & semantic_ok=0 触发二次修复
+    Spec constraints
+    - [A] Novelty only for compile_ok=1: implemented in _process_completed_job
+    - [B] Archive only compile_ok=1: implemented in _process_completed_job
+    - [C] Repair counts toward budget: implemented in _process_repair
+    - [E] Semantic repair (optional): second-stage repair for compile_ok=1 & semantic_ok=0
     """
 
     def __init__(
@@ -1067,27 +1060,27 @@ class AutoformalizationRunner(EvolutionRunner):
         verbose: bool = True,
     ):
         """
-        初始化 AutoformalizationRunner。
+        Initialize AutoformalizationRunner.
 
         Args:
-            evo_config: 进化配置（来自 ShinkaEvolve）
-            job_config: 任务配置
-            db_config: 数据库配置
-            repair_config: 修复配置（可选，默认使用 RepairConfig()）
-            termination_config: 终止配置（可选）
-            problem_config: 问题配置（informal, header 等）
-            verbose: 是否输出详细日志
+            evo_config: evolution config (from ShinkaEvolve)
+            job_config: job config
+            db_config: database config
+            repair_config: repair config (optional; defaults to RepairConfig())
+            termination_config: termination config (optional)
+            problem_config: problem config (informal, header, etc.)
+            verbose: enable verbose logging
         """
-        # 调用父类构造函数
+        # Call parent constructor.
         super().__init__(evo_config, job_config, db_config, verbose)
 
-        # Repair 配置
+        # Repair config.
         self.repair_config = repair_config or RepairConfig()
 
-        # 终止配置
+        # Termination config.
         self.termination_config = termination_config or TerminationConfig()
 
-        # 问题配置（informal, header 等）
+        # Problem config (informal, header, etc.).
         self.problem_config = problem_config or self._load_problem_config()
 
         # Optional experiment knobs (wired via env/launcher for reproducibility).
@@ -1101,7 +1094,7 @@ class AutoformalizationRunner(EvolutionRunner):
         self.seedbank_debit_seed0: bool = _env_truthy("AUTOFORMAL_SEEDBANK_DEBIT_SEED0", default=False)
         self.seedbank_debited_calls: int = 0
 
-        # LLM 模式（real/mock/replay/auto fallback）与可审计元数据
+        # LLM mode (real/mock/replay/auto fallback) + audit metadata.
         self.llm_mode_requested: str = ""
         self.llm_mode_effective: str = ""
         self.llm_unavailable: bool = False
@@ -1159,14 +1152,14 @@ class AutoformalizationRunner(EvolutionRunner):
         self._write_run_metadata()
         self._write_run_config()
 
-        # Repair Queue: 存放需要修复的候选
+        # Repair Queue: candidates that require repair.
         self.repair_queue: List[RepairQueueItem] = []
 
-        # Failure Buffer: 记录所有失败（约束 B）
+        # Failure Buffer: record all failures (constraint B).
         failure_buffer_path = f"{self.results_dir}/failure_buffer.json"
         self.failure_buffer = FailureBuffer(failure_buffer_path)
 
-        # 预算跟踪（约束 C）
+        # Budget tracking (constraint C).
         self.total_repair_llm_calls = 0
         self.total_repair_evals = 0
         self.total_repair_cost = 0.0
@@ -1175,7 +1168,7 @@ class AutoformalizationRunner(EvolutionRunner):
         self.total_semantic_repair_cost = 0.0
         self.total_semantic_repair_successes = 0
 
-        # 终止跟踪
+        # Termination tracking.
         self.start_time = time.time()
         self.soft_resets_count = 0
         self.best_fitness_tuple: Optional[tuple] = None
@@ -1183,13 +1176,14 @@ class AutoformalizationRunner(EvolutionRunner):
         self.termination_reason: Optional[str] = None
         self._last_meta_update_generation: int = -1
 
-        # Seed0(file) 剔除标志：当有其它 compile_ok=1 程序进入 archive 后，
-        # 删除来自 `--init_program` 的 seed0（仅 file seed0），避免搜索长期依赖占位符。
+        # File-seed0 pruning: once other compile_ok=1 programs enter the archive, prune the seed0
+        # program that came from `--init_program` (file-seed0 only) to avoid long-term dependence
+        # on placeholders.
         self._file_seed0_pruned: bool = False
 
-        # 打印初始化信息
+        # Log init info.
         logger.info("=" * 60)
-        logger.info("AutoformalizationRunner initialized (规约 v1.2)")
+        logger.info("AutoformalizationRunner initialized (spec v1.2)")
         logger.info(f"  Repair enabled: {self.repair_config.enabled}")
         logger.info(f"  Max repair attempts: {self.repair_config.max_repair_attempts}")
         logger.info(f"  Repair temperature: {self.repair_config.repair_temperature}")
@@ -1589,17 +1583,17 @@ class AutoformalizationRunner(EvolutionRunner):
             return
     def _load_problem_config(self) -> Dict[str, Any]:
         """
-        从文件加载问题配置。
+        Load problem configuration from file.
 
-        【为什么从文件加载？】
-        problem_config.json 由 run_evo.py 在启动时创建，包含：
-        - informal: 自然语言数学陈述
-        - header: Lean4 的 import/open 语句
-        - ground_truth: 标准答案（用于 BEq+）
-        - use_beq: 是否启用 BEq+ 检查
+        Why load from a file?
+        `problem_config.json` is created by `run_evo.py` at run start and includes:
+        - informal: natural-language statement
+        - header: Lean 4 header (imports/opens)
+        - ground_truth: reference statement (for BEq+)
+        - use_beq: whether to enable BEq+
 
-        这种设计允许 run_evo.py 和 AutoformalizationRunner 解耦，
-        配置变更不需要修改代码。
+        This design decouples `run_evo.py` and AutoformalizationRunner; changing config does not
+        require editing code.
         """
         candidate_paths = [
             Path(str(self.results_dir)) / "problem_config.json",
@@ -1612,7 +1606,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 if self.verbose:
                     logger.info(f"[Config] Loaded problem config from: {config_path}")
                 return cfg
-        # 默认配置（用于测试或缺少配置文件时）
+        # Default config (for tests or when config file is missing).
         return {
             "informal": "",
             "header": "import Mathlib",
@@ -1624,34 +1618,34 @@ class AutoformalizationRunner(EvolutionRunner):
         """
         Generate initial program with LLM, with Kimina adapter support.
 
-        【重写原因】
-        Kimina-Autoformalizer 模型需要简单 prompt 才能正常工作：
-        - 通用 prompt 太复杂，模型可能复读示例或输出错误格式
-        - 使用 KiminaAdapter 生成简单 prompt 效果更好
+        Why override?
+        Kimina-Autoformalizer models respond better to simple prompts:
+        - Generic prompts can be too verbose, causing the model to echo examples or output in the wrong format.
+        - Using KiminaAdapter to build a simpler prompt tends to work better.
 
         Returns:
-            (initial_code, patch_name, patch_description, api_costs) 元组
+            (initial_code, patch_name, patch_description, api_costs) tuple
         """
         import re
 
         llm_kwargs = self.llm.get_kwargs()
-        # SPEC v1.0: Initial 阶段 temperature=0.5（repair=0.0 另行设置；evolution=0.7 由 llm_kwargs 默认提供）
+        # SPEC v1.0: Gen0 temperature=0.5 (repair uses 0.0 separately; evolution uses llm_kwargs default).
         llm_kwargs["temperature"] = 0.5
         model_name = self.evo_config.llm_models[0] if self.evo_config.llm_models else ""
         adapter = get_model_adapter(model_name)
         total_costs = 0.0
 
-        # 获取问题信息
+        # Get problem info.
         informal = self.problem_config.get("informal", "")
         header = self.problem_config.get("header", "import Mathlib")
 
-        # 根据模型类型选择 prompt
+        # Choose prompt strategy by model type.
         if adapter and is_kimina_model(model_name):
-            # Kimina 模型使用简单 prompt
+            # Kimina models use a simpler prompt.
             sys_msg, user_msg = adapter.build_prompt(informal, header)
             logger.info(f"[Gen0] Using Kimina adapter for model: {model_name}")
         else:
-            # 通用模型使用原始 prompt
+            # General models use the default prompt.
             sys_msg, user_msg = self.prompt_sampler.initial_program_prompt()
 
         msg_history = []
@@ -1692,12 +1686,12 @@ class AutoformalizationRunner(EvolutionRunner):
 
             total_costs += response.cost or 0
 
-            # 使用 adapter 解析输出（如果可用）
+            # Use adapter to parse output (if available).
             initial_code = None
             if adapter:
                 initial_code = adapter.parse_output(response.content)
 
-            # 回退：尝试标准提取
+            # Fallback: try standard code-fence extraction.
             if not initial_code:
                 initial_code = extract_between(
                     response.content,
@@ -1706,7 +1700,7 @@ class AutoformalizationRunner(EvolutionRunner):
                     False,
                 )
 
-            # 回退：直接从响应中提取声明
+            # Fallback: extract a declaration directly from the raw response.
             if not initial_code and self.evo_config.language == "lean":
                 # Extract a full Lean file (imports + theorem) from the raw model output.
                 cand = normalize_lean_code(response.content or "")
@@ -1714,7 +1708,7 @@ class AutoformalizationRunner(EvolutionRunner):
                     initial_code = cand
 
             if initial_code:
-                # 硬过滤：禁止 trivial/tautological placeholder 作为初始解
+                # Hard filter: forbid trivial/tautological placeholders as initial programs.
                 if self.evo_config.language == "lean" and is_trivial_tautology_placeholder(initial_code):
                     if self.verbose:
                         logger.info(
@@ -1754,7 +1748,7 @@ class AutoformalizationRunner(EvolutionRunner):
                     )
                 return initial_code, patch_name, patch_description, total_costs
 
-            # 提取失败，重试
+            # Extraction failed; retry.
             if self.verbose:
                 logger.info(
                     f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
@@ -2649,8 +2643,9 @@ class AutoformalizationRunner(EvolutionRunner):
         self._update_best_solution()
         logger.info(f"[Gen0] Bootstrapped {len(inserted_programs)} compile_ok=1 seeds")
 
-        # 如果 seed0 来自文件（常为占位符），且 Gen0 已经有其它 compile_ok=1 seed，
-        # 则立即剔除 file seed0，避免它在 Gen>=1 的 parent/inspiration 采样中占据优势。
+        # If seed0 came from a file (often a placeholder) and Gen0 already produced other
+        # compile_ok=1 seeds, prune file seed0 immediately so it does not dominate
+        # Gen>=1 parent/inspiration sampling.
         if not self._file_seed0_pruned:
             has_non_file_seed = any(
                 str((p.metadata or {}).get("init_seed_source", "")).strip().lower()
@@ -2669,15 +2664,15 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def _update_best_solution(self):
         """
-        Override: 更智能地更新 best 目录。
+        Override: update the `best/` directory more robustly.
 
-        处理两种目录结构：
-        - Gen 0: gen_0/seed_X/main.lean (多个 seed)
-        - Gen 1+: gen_N/main.lean (单个文件)
+        We support two directory layouts:
+        - Gen 0: gen_0/seed_X/main.lean (multiple seeds)
+        - Gen 1+: gen_N/main.lean (single file)
 
-        通过匹配文件内容来确定正确的源文件。
-        注意：Gen0 可能通过 repair 生成 `main_repairK.lean`，最佳解也可能来自该文件，
-        因此需要在 seed 目录下扫描 `main*.lean` 而不只是 `main.lean`。
+        We locate the correct source by matching file contents.
+        Note: Gen0 may generate `main_repairK.lean` during repair, and the best program may come
+        from that file. Therefore we scan `main*.lean` under each seed directory (not only `main.lean`).
         """
         best_programs = self.db.get_top_programs(n=1, correct_only=True)
         if not best_programs:
@@ -2694,19 +2689,19 @@ class AutoformalizationRunner(EvolutionRunner):
 
         self.best_program_id = best_program.id
 
-        # 查找源文件路径
+        # Locate the source path for the best program.
         gen_dir = Path(self.results_dir) / f"gen_{best_program.generation}"
         source_path = None
         matched_main_file = None
 
         if best_program.generation == 0:
-            # Gen 0: 需要在 seed 目录中查找匹配的文件
+            # Gen 0: search inside seed directories for a matching file.
             for seed_dir in sorted(gen_dir.glob("seed_*")):
                 for candidate in sorted(seed_dir.glob(f"main*.{self.lang_ext}")):
                     if not candidate.exists():
                         continue
                     content = candidate.read_text(encoding="utf-8")
-                    # 比较代码内容（忽略空白差异）
+                    # Compare code content (ignoring outer whitespace).
                     if content.strip() == best_program.code.strip():
                         source_path = seed_dir
                         matched_main_file = candidate
@@ -2720,7 +2715,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 )
                 return
         else:
-            # Gen 1+: 直接使用 gen_N 目录
+            # Gen 1+: use gen_N directory directly.
             source_path = gen_dir
 
         if not source_path.exists():
@@ -2759,32 +2754,32 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def _process_completed_job(self, job: RunningJob):
         """
-        处理评估完成的任务。
+        Process a completed evaluation job.
 
         ================================================================================
-                    这是整个 repair 逻辑的核心入口
+                This is the core entrypoint for the repair logic
         ================================================================================
 
-        【执行流程】
-        1. 获取评估结果（metrics）
-        2. 检查 compile_ok:
-           - compile_ok = 1 → 存入 archive（正常流程）
-           - compile_ok = 0 → 进入 repair 流程
-        3. Repair 流程:
-           - 如果 repair 启用 → 尝试修复
-           - 如果 repair 禁用 → 直接记录到 failure_buffer
+        Execution flow
+        1. Read evaluation results (metrics)
+        2. Check compile_ok:
+           - compile_ok = 1 → insert into archive (normal path)
+           - compile_ok = 0 → enter repair path
+        3. Repair path:
+           - If repair enabled → attempt repair
+           - If repair disabled → record in failure_buffer
 
-        【约束实现】
-        - [A] compile_ok=0 的候选跳过 novelty（不调用父类的 novelty 检查）
-        - [B] compile_ok=0 的候选不入 archive（不调用 db.add）
+        Constraints enforced
+        - [A] compile_ok=0 candidates skip novelty (do not call parent novelty checks)
+        - [B] compile_ok=0 candidates are not inserted into archive (do not call db.add)
         """
         end_time = time.time()
         rtime = end_time - job.start_time
 
-        # 获取评估结果
+        # Get evaluation results.
         results = self.scheduler.get_job_results(job.job_id, job.results_dir)
 
-        # 读取候选代码
+        # Read candidate code.
         file_exists = Path(job.exec_fname).exists()
         try:
             evaluated_code = Path(job.exec_fname).read_text(encoding="utf-8")
@@ -2793,9 +2788,9 @@ class AutoformalizationRunner(EvolutionRunner):
             evaluated_code = ""
 
         # =====================================================================
-        # 【修复】文件不存在时直接记录失败，跳过 repair
+        # Fix: if the candidate file does not exist, record failure and skip repair.
         # =====================================================================
-        # 这种情况发生在 patch 生成完全失败（所有尝试都失败）时
+        # This can happen when patch generation fails completely (all attempts fail).
         if not file_exists:
             logger.warning(
                 f"[Patch Failed] File does not exist for gen {job.generation}: "
@@ -2813,7 +2808,7 @@ class AutoformalizationRunner(EvolutionRunner):
             )
             return
 
-        # 提取 metrics
+        # Extract metrics.
         metrics_val = results.get("metrics", {}) if results else {}
         compile_ok = metrics_val.get("compile_ok", 0)
         compile_error_type = metrics_val.get("compile_error_type", "")
@@ -2822,7 +2817,7 @@ class AutoformalizationRunner(EvolutionRunner):
         original_code = str(metrics_val.get("code") or evaluated_code or "")
 
         # =====================================================================
-        # 【约束 A, B】compile_ok=0 的处理
+        # Constraint A/B handling for compile_ok=0
         # =====================================================================
         if compile_ok == 0:
             # Track compile-fail candidates in meta memory (global insights),
@@ -2858,17 +2853,17 @@ class AutoformalizationRunner(EvolutionRunner):
                 f"error_type: {compile_error_type}"
             )
 
-            # 【修复】如果 statement 为空，尝试从文件直接读取
-            # 这处理 normalize_lean_statement 返回空字符串的情况
+            # Fix: if statement is empty, try extracting from file content directly.
+            # This handles cases where normalize_lean_statement returns an empty string.
             if not statement and evaluated_code:
-                # 尝试从原始文件内容提取 statement
+                # Try extracting statement from raw file content.
                 statement = normalize_lean_statement(evaluated_code)
                 if statement:
                     logger.info(
                         f"[Repair] Recovered statement from file content for gen {job.generation}"
                     )
 
-            # 【修复】如果没有可用代码且没有有效错误信息，跳过 repair
+            # Fix: if there is no code and no error info, skip repair.
             if not original_code and not compile_error_msg:
                 logger.warning(
                     f"[Repair] Empty code and no error info for gen {job.generation}. "
@@ -3030,7 +3025,7 @@ class AutoformalizationRunner(EvolutionRunner):
                     write_llm_fail_marker=True,
                 )
 
-                # 创建 repair item 并尝试修复
+                # Create repair item and attempt repair.
                 repair_item = RepairQueueItem(
                     program_id=str(uuid.uuid4()),
                     exec_fname=job.exec_fname,
@@ -3052,7 +3047,7 @@ class AutoformalizationRunner(EvolutionRunner):
                         write_llm_fail_marker=False,
                     )
             else:
-                # Repair 禁用，直接记录失败
+                # Repair disabled: record failure directly.
                 self._add_to_failure_buffer(
                     program_id=str(uuid.uuid4()),
                     generation=job.generation,
@@ -3069,13 +3064,13 @@ class AutoformalizationRunner(EvolutionRunner):
                     attempt=1,
                     write_llm_fail_marker=True,
                 )
-            # 【关键】compile_ok=0 不入 archive，直接返回
+            # Key rule: compile_ok=0 is never inserted into archive; return early.
             return
 
         # =====================================================================
-        # compile_ok=1: 正常处理流程
+        # compile_ok=1: normal path
         # =====================================================================
-        # 使用预计算的 embedding 和 novelty cost
+        # Reuse precomputed embedding + novelty cost.
         code_embedding = job.code_embedding
         e_cost = job.embed_cost
         n_cost = job.novelty_cost
@@ -3094,8 +3089,8 @@ class AutoformalizationRunner(EvolutionRunner):
         private_metrics = metrics_val.get("private", {})
         text_feedback = metrics_val.get("text_feedback", "")
 
-        # 硬过滤：`theorem ... : True := ...` 属于占位符，绝对禁止进入 archive/parent/inspirations。
-        # 这里做兜底（正常情况下应已在 run_patch / Gen0 阶段被拒收）。
+        # Hard filter: `theorem ... : True := ...` is a placeholder and must never enter
+        # archive/parent/inspirations. This is a safety net (normally rejected in run_patch / Gen0).
         if self.evo_config.language == "lean":
             stmt_for_guard = str(statement or "").strip()
             if not stmt_for_guard and evaluated_code:
@@ -3146,7 +3141,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 self.db.save()
                 return
 
-        # 【约束 B】只有 compile_ok=1 才存入 archive
+        # Constraint B: only compile_ok=1 is inserted into archive.
         db_program = Program(
             id=str(uuid.uuid4()),
             code=evaluated_code,
@@ -3182,8 +3177,9 @@ class AutoformalizationRunner(EvolutionRunner):
             f"score={combined_score:.2f}, tuple={metrics_val.get('fitness_tuple')}"
         )
 
-        # Seed0(file) 剔除：一旦出现任意 Gen>=1 的 compile_ok=1 程序进入 archive，
-        # 就删除来自 `--init_program` 的 seed0（及其岛屿拷贝），避免后续采样退化回占位符。
+        # File-seed0 pruning: once any Gen>=1 compile_ok=1 program enters the archive, delete
+        # the seed0 introduced by `--init_program` (and its island copies) to avoid sampling
+        # collapsing back to placeholders.
         if not self._file_seed0_pruned and int(getattr(job, "generation", 0) or 0) > 0:
             delete_fn = getattr(self.db, "delete_file_seed0", None)
             deleted_count = int(delete_fn()) if callable(delete_fn) else 0
@@ -3194,35 +3190,35 @@ class AutoformalizationRunner(EvolutionRunner):
                 )
             self._file_seed0_pruned = True
 
-        # 后续处理（meta memory, LLM selection 等）
+        # Post-processing (meta memory, LLM selection, etc.).
         self._post_process_program(db_program, job)
 
     def _process_repair(self, repair_item: RepairQueueItem, original_job: RunningJob):
         """
-        处理 compile_fail 候选的修复。
+        Repair compile-fail candidates.
 
         ================================================================================
-                         Repair 机制的核心实现
+                     Core implementation of the repair mechanism
         ================================================================================
 
-        【执行流程】
+        Execution flow
         for attempt in range(max_attempts):
-            1. 构建 repair prompt（包含错误信息）
-            2. 调用 LLM 生成修复版本（temp=0）
-            3. 【约束 C】计入预算
-            4. 提取修复后的代码
-            5. 重新评估
-            6. 检查 compile_ok:
-               - 成功 → 存入 archive，返回
-               - 失败 → 更新错误信息，继续下一次尝试
+            1. Build repair prompt (with compiler feedback)
+            2. Call LLM to generate a repaired version (temp=0)
+            3. Constraint C: count toward budget
+            4. Extract repaired code
+            5. Re-evaluate
+            6. Check compile_ok:
+               - success → insert into archive, return
+               - failure → update error info and continue to next attempt
 
-        【为什么用 temp=0？】
-        修复任务需要的是"正确"而不是"多样"。
-        高温度可能产生更多变体，但我们只想修复语法错误，不需要创造性。
+        Why temp=0?
+        Repair aims for correctness rather than diversity. Higher temperatures can create
+        more variants, but we want minimal edits that fix compilation, not creative rewrites.
 
         Args:
-            repair_item: 需要修复的候选
-            original_job: 原始的任务对象（用于获取上下文）
+            repair_item: the candidate to repair
+            original_job: original job object (for context)
         """
         max_attempts = self.repair_config.max_repair_attempts
         if repair_item.generation == 0 and self.repair_config.max_repair_attempts_gen0:
@@ -3293,7 +3289,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 f"[Repair] Attempt {attempt + 1}/{max_attempts} for gen {repair_item.generation}"
             )
 
-            # 构建 repair prompt
+            # Build repair prompt.
             sys_msg, user_msg = build_repair_prompt(
                 original_code=repair_item.original_code,
                 compile_error_type=repair_item.compile_error_type,
@@ -3305,7 +3301,7 @@ class AutoformalizationRunner(EvolutionRunner):
             llm_kwargs = self.llm.get_kwargs()
             llm_kwargs["temperature"] = self.repair_config.repair_temperature
 
-            # 【约束 C】调用 LLM，计入预算（口径：底层 LLM client 的 total_calls 增量）
+            # Constraint C: call LLM and count toward budget (delta of underlying LLM client's total_calls).
             repair_llm = self._repair_llm_override()
             before_calls = getattr(self.llm, "total_calls", None)
             response = None
@@ -3425,10 +3421,10 @@ class AutoformalizationRunner(EvolutionRunner):
             dump_payload["decision"] = "code_extracted"
             _maybe_dump_repair_attempt(payload=dump_payload, raw_content=raw_content)
 
-            # 【约束 C】重新评估，计入预算
+            # Constraint C: re-evaluate and count toward budget.
             self.total_repair_evals += 1
 
-            # 创建修复后的程序文件
+            # Create repaired program file.
             repair_fname = repair_item.exec_fname.replace(
                 f".{self.lang_ext}", f"_repair{attempt + 1}.{self.lang_ext}"
             )
@@ -3436,7 +3432,7 @@ class AutoformalizationRunner(EvolutionRunner):
             with open(repair_fname, "w") as f:
                 f.write(repaired_program)
 
-            # 运行评估
+            # Run evaluation.
             results, rtime = self.scheduler.run(repair_fname, repair_item.results_dir)
 
             if results:
@@ -3444,12 +3440,12 @@ class AutoformalizationRunner(EvolutionRunner):
                 new_compile_ok = metrics.get("compile_ok", 0)
 
                 if new_compile_ok == 1:
-                    # 修复成功！
+                    # Repair succeeded!
                     logger.info(
                         f"[Repair] SUCCESS! Compile fixed after {attempt + 1} attempts"
                     )
 
-                    # 存入 archive
+                    # Insert into archive.
                     db_program = self._add_repaired_to_archive(
                         repair_item,
                         repaired_program,
@@ -3459,7 +3455,7 @@ class AutoformalizationRunner(EvolutionRunner):
                         original_job,
                     )
 
-                    # 记录到 failure_buffer（标记为成功）
+                    # Record into failure_buffer (mark success).
                     self._add_to_failure_buffer(
                         program_id=repair_item.program_id,
                         generation=repair_item.generation,
@@ -3472,7 +3468,7 @@ class AutoformalizationRunner(EvolutionRunner):
                     )
                     return db_program
 
-                # 修复失败，更新错误信息，继续下一次尝试
+                # Repair failed; update error info and continue to next attempt.
                 repair_item.compile_error_type = metrics.get("compile_error_type", "")
                 repair_item.compile_error_msg = metrics.get("compile_error_msg", "")
                 repair_item.original_code = str(metrics.get("code") or repaired_code or "")
@@ -3491,7 +3487,7 @@ class AutoformalizationRunner(EvolutionRunner):
             )
             return None
 
-        # 修复次数用尽，仍然失败
+        # Repair attempts exhausted; still failing.
         logger.warning(
             f"[Repair] EXHAUSTED after {max_attempts} attempts for gen {repair_item.generation}"
         )
@@ -3762,7 +3758,7 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def _build_repaired_program(self, statement: str) -> str:
         """
-        从修复后的 statement 构建完整的 Lean 文件内容。
+        Build a complete Lean file from a repaired statement.
         """
         statement = statement.strip()
         if "EVOLVE-BLOCK-START" in statement or "EVOLVE-BLOCK-END" in statement:
@@ -3782,7 +3778,7 @@ class AutoformalizationRunner(EvolutionRunner):
         compute_time: float,
         original_job: RunningJob,
     ) -> Program:
-        """将修复成功的程序存入 archive，并返回插入的 Program。"""
+        """Insert a repaired program into the archive and return the inserted Program."""
         code_embedding, e_cost = self.get_code_embedding(repaired_exec_fname)
 
         db_program = Program(
@@ -3809,7 +3805,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 "llm_calls_used": int(repair_item.total_repair_llm_calls_used or 0),
                 "original_error_type": repair_item.compile_error_type,
                 "fitness_tuple": list(metrics.get("fitness_tuple", (1, 0, 0, 0.0))),
-                "repaired": True,  # 标记这是修复后的程序
+                "repaired": True,  # mark as repaired program
                 "cycle_log_prob": metrics.get("cycle_log_prob", None),
                 "cycle_normalized_log_prob": metrics.get("cycle_normalized_log_prob", None),
                 "cycle_score": metrics.get("cycle_score", None),
@@ -3833,7 +3829,7 @@ class AutoformalizationRunner(EvolutionRunner):
         repair_llm_calls_used: int,
         final_status: str,
     ):
-        """添加记录到 failure_buffer。"""
+        """Add a record into failure_buffer."""
         record = FailureRecord(
             program_id=program_id,
             generation=generation,
@@ -3848,8 +3844,8 @@ class AutoformalizationRunner(EvolutionRunner):
         self.failure_buffer.add(record)
 
     def _post_process_program(self, db_program: Program, job: RunningJob):
-        """程序成功入库后的后续处理。"""
-        # Meta memory 跟踪
+        """Post-processing after a program is inserted into the DB/archive."""
+        # Meta memory tracking.
         self.meta_summarizer.add_evaluated_program(db_program)
         # Meta update: trigger periodically based on the number of unprocessed
         # evaluated programs (same semantics as shinka/core/runner.py).
@@ -3865,7 +3861,7 @@ class AutoformalizationRunner(EvolutionRunner):
                 if meta_cost and meta_cost > 0:
                     logger.info(f"[Meta] Update cost: ${meta_cost:.4f}")
 
-        # LLM selection 更新
+        # LLM selection update.
         if self.llm_selection is not None and db_program.metadata:
             if "model_name" in db_program.metadata:
                 parent = (
@@ -3943,7 +3939,7 @@ class AutoformalizationRunner(EvolutionRunner):
         self._last_meta_update_generation = self.completed_generations
 
     def get_repair_stats(self) -> Dict[str, Any]:
-        """获取 repair 统计信息。"""
+        """Get repair-related statistics."""
         return {
             "total_repair_llm_calls": self.total_repair_llm_calls,
             "total_repair_evals": self.total_repair_evals,
@@ -3956,7 +3952,7 @@ class AutoformalizationRunner(EvolutionRunner):
         }
 
     # =========================================================================
-    # 终止逻辑
+    # Termination logic
     # =========================================================================
 
     def _generation_llm_api_calls(self) -> int:
@@ -4006,13 +4002,13 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def _check_budget_exhausted(self) -> Optional[str]:
         """
-        检查是否预算耗尽（硬停）。
+        Check whether any budget is exhausted (hard stop).
 
-        返回触发原因（如果耗尽），否则返回 None。
+        Returns the trigger reason if exhausted, otherwise None.
 
-        预算语义（统一口径）：
-        - max_llm_calls：生成侧 LLM 原始调用次数（`self.llm.total_calls` 等，包含内部重试）
-        - max_evals：评估侧“有效评估次数”（db 入库数 + repair evals）
+        Budget semantics:
+        - max_llm_calls: generation-side raw LLM call count (`self.llm.total_calls`, includes retries)
+        - max_evals: evaluator-side "effective eval count" (DB insertions + repair evals)
         """
         tc = self.termination_config
 
@@ -4025,12 +4021,12 @@ class AutoformalizationRunner(EvolutionRunner):
         raw_llm_api_calls = int(self._generation_llm_api_calls())
         budget_calls = raw_llm_api_calls + int(getattr(self, "seedbank_debited_calls", 0) or 0)
 
-        # 检查生成侧 LLM 调用次数（raw）
+        # Check generation-side LLM call count (raw + seedbank debits).
         if tc.max_llm_calls is not None:
             if budget_calls >= tc.max_llm_calls:
                 return f"max_llm_calls_reached ({budget_calls} >= {tc.max_llm_calls})"
 
-        # 检查评估次数（有效评估次数）
+        # Check evaluator-side effective eval count.
         if tc.max_evals is not None:
             total_effective_evals = (
                 len(self.db.get_all_programs())
@@ -4040,7 +4036,7 @@ class AutoformalizationRunner(EvolutionRunner):
             if total_effective_evals >= tc.max_evals:
                 return f"max_evals_reached ({total_effective_evals} >= {tc.max_evals})"
 
-        # 检查运行时间
+        # Check wall-clock time.
         if tc.max_time_seconds is not None:
             elapsed = time.time() - self.start_time
             if elapsed >= tc.max_time_seconds:
@@ -4050,9 +4046,9 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def _check_exploration_stagnation(self, current_best_tuple: tuple) -> bool:
         """
-        检查是否探索停滞（软停）。
+        Check exploration stagnation (soft stop).
 
-        返回 True 表示停滞。
+        Returns True if stagnated.
         """
         # `stagnation_generations <= 0` is treated as "disable stagnation early-stop".
         # This matches typical experiment naming like `__nostag__`.
@@ -4069,14 +4065,14 @@ class AutoformalizationRunner(EvolutionRunner):
             self.generations_without_improvement = 0
             return False
 
-        # 词典序比较
+        # Lexicographic compare.
         if current_best_tuple > self.best_fitness_tuple:
-            # 有改进！
+            # Improvement.
             self.best_fitness_tuple = current_best_tuple
             self.generations_without_improvement = 0
             return False
         else:
-            # 无改进
+            # No improvement.
             self.generations_without_improvement += 1
             if self.generations_without_improvement >= self.termination_config.stagnation_generations:
                 return True
@@ -4084,27 +4080,28 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def _perform_soft_reset(self):
         """
-        执行软重置。
+        Perform a soft reset.
 
-        【当前实现状态】
-        目前此方法仅记录停滞事件和重置计数器，尚未实际调整搜索参数。
+        Current implementation status
+        This method currently only records the stagnation event and resets counters. It does
+        not yet modify search parameters.
 
-        【设计意图（尚未实现）】
-        当探索停滞时，可以通过调整参数来"重启"搜索：
-        1. 提高温度 → 增加多样性
-        2. 提高 crossover 概率 → 增加组合探索
+        Intended design (not implemented yet)
+        When exploration stagnates, we may "restart" the search by adjusting parameters:
+        1) increase temperature → more diversity
+        2) increase crossover probability → more combinatorial exploration
 
-        【TODO】
-        后续版本可以在此处添加实际的参数调整逻辑，例如：
-        - 修改 self.llm.get_kwargs()["temperature"]
-        - 修改 self.evo_config.patch_type_probs
+        TODO
+        A future version can implement actual parameter updates here, e.g.:
+        - edit `self.llm.get_kwargs()["temperature"]`
+        - edit `self.evo_config.patch_type_probs`
         """
         self.soft_resets_count += 1
         tc = self.termination_config
 
         logger.info(f"[SoftReset] Performing soft reset #{self.soft_resets_count}")
-        logger.info(f"  Temperature boost (配置值，尚未应用): +{tc.reset_temperature_boost}")
-        logger.info(f"  Crossover boost (配置值，尚未应用): +{tc.reset_crossover_boost}")
+        logger.info(f"  Temperature boost (config value; not applied yet): +{tc.reset_temperature_boost}")
+        logger.info(f"  Crossover boost (config value; not applied yet): +{tc.reset_crossover_boost}")
         # Apply diversity pressure by boosting parent usage penalty.
         try:
             old_alpha = float(getattr(self.db_config, "parent_usage_penalty_alpha", 0.0) or 0.0)
@@ -4114,11 +4111,11 @@ class AutoformalizationRunner(EvolutionRunner):
         setattr(self.db_config, "parent_usage_penalty_alpha", new_alpha)
         logger.info(f"  Parent usage penalty alpha: {old_alpha:.3f} -> {new_alpha:.3f}")
 
-        # 重置停滞计数器
+        # Reset stagnation counter.
         self.generations_without_improvement = 0
 
     def _save_termination_log(self) -> Dict[str, Any]:
-        """保存终止日志。"""
+        """Save the termination log."""
         # Generation-side call accounting:
         # - raw_llm_api_calls: actual HTTP calls made by the generator (incl. retries)
         # - seedbank_debited_calls: synthetic debits for seedbank reuse fairness
@@ -4126,7 +4123,7 @@ class AutoformalizationRunner(EvolutionRunner):
         raw_llm_api_calls = int(getattr(self.llm, "total_calls", 0) or 0)
         seedbank_debited_calls = int(self.seedbank_debited_calls or 0)
         total_budget_calls = raw_llm_api_calls + seedbank_debited_calls
-        # 评估侧“有效评估次数”：用于单独汇报评估开销
+        # Evaluator-side "effective eval count" (reported separately for evaluation overhead).
         total_effective_evals = (
             len(self.db.get_all_programs())
             + int(getattr(self, "total_repair_evals", 0) or 0)
@@ -4212,7 +4209,7 @@ class AutoformalizationRunner(EvolutionRunner):
             "code_embed_sim_threshold": getattr(self.evo_config, "code_embed_sim_threshold", None),
             "openai_embed_base_url": os.environ.get("OPENAI_EMBED_BASE_URL", ""),
             "novelty_llm_base_url": os.environ.get("OPENAI_NOVELTY_LLM_BASE_URL", ""),
-            # 主预算：生成侧 raw 调用次数（包含内部重试）
+            # Main budget: generation-side raw calls (includes internal retries).
             "total_budget_calls": int(total_budget_calls),
             "total_llm_calls": int(total_budget_calls),
             # Diagnostics: split actual vs debited calls.
@@ -4253,7 +4250,7 @@ class AutoformalizationRunner(EvolutionRunner):
         return log_data
 
     def _classify_failure_type(self) -> str:
-        """根据终止原因分类失败类型。"""
+        """Classify the failure type based on termination reason."""
         if self.termination_reason is None:
             return "normal_completion"
         elif "max_llm_calls" in self.termination_reason or \
@@ -4267,7 +4264,7 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def _finalize_run(self) -> None:
         """Finalize run: write summaries, termination log, and stats (shared by baselines & ours)."""
-        # 末尾收尾：Meta summary + 保存最佳程序等（沿用父类逻辑）
+        # Finalization: meta summary + best program snapshot, etc. (keep parent-class semantics).
         best_program = self.db.get_best_program()
         self.meta_summarizer.perform_final_summary(str(self.results_dir), best_program)
         self._save_meta_memory()
@@ -4279,13 +4276,13 @@ class AutoformalizationRunner(EvolutionRunner):
         logger.info(f"Evolution run ended at {end_time}")
         logger.info("=" * 80)
 
-        # 保存终止日志
+        # Save termination log.
         termination_log = self._save_termination_log()
 
-        # 打印统计信息
+        # Print stats.
         repair_stats = self.get_repair_stats()
         logger.info("=" * 60)
-        logger.info("Repair Statistics (规约 v1.1 约束 C):")
+        logger.info("Repair Statistics (spec v1.1 constraint C):")
         logger.info(f"  Total repair LLM calls: {repair_stats['total_repair_llm_calls']}")
         logger.info(f"  Total repair evals: {repair_stats['total_repair_evals']}")
         logger.info(f"  Total repair cost: ${repair_stats['total_repair_cost']:.4f}")
@@ -4893,12 +4890,12 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def run(self):
         """
-        运行进化（带 repair + 预算/停滞检测 + 终止日志）。
+        Run evolution with repair + budget/stagnation checks + termination logging.
 
-        相比父类 run，增加：
-        - 硬停：_check_budget_exhausted
-        - 软停：_check_exploration_stagnation → _perform_soft_reset
-        - 终止原因记录到 termination_log
+        Compared to the parent `run()`, this adds:
+        - hard-stop: _check_budget_exhausted
+        - soft-stop: _check_exploration_stagnation → _perform_soft_reset
+        - record termination reason to termination_log
         """
         mode_norm = str(self.baseline_mode or "ours").strip().lower()
         if mode_norm == "batchn":
@@ -4919,7 +4916,7 @@ class AutoformalizationRunner(EvolutionRunner):
             f"target: {target_gens} generations (with budget/stagnation checks)"
         )
 
-        # 先跑第 0 代，填充数据库
+        # Run generation 0 first to bootstrap the database.
         if self.completed_generations == 0 and target_gens > 0:
             logger.info("Running generation 0 sequentially to initialize database...")
             self._run_generation_0()
@@ -4935,22 +4932,22 @@ class AutoformalizationRunner(EvolutionRunner):
             self.next_generation_to_submit = 1
             logger.info(f"Completed generation 0, total: 1/{target_gens}")
 
-        # 主循环（带预算/停滞检测）
+        # Main loop (with budget/stagnation checks).
         if self.completed_generations < target_gens:
             logger.info("Starting parallel execution for remaining generations...")
 
             while (
                 self.completed_generations < target_gens or len(self.running_jobs) > 0
             ):
-                # 1) 检查已完成任务
+                # 1) Check completed jobs.
                 completed_jobs = self._check_completed_jobs()
 
-                # 2) 处理已完成任务
+                # 2) Process completed jobs.
                 if completed_jobs:
                     for job in completed_jobs:
                         self._process_completed_job(job)
 
-                    # 更新完成代数
+                    # Update completed generation count.
                     self._update_completed_generations()
 
                     if self.verbose:
@@ -4960,7 +4957,7 @@ class AutoformalizationRunner(EvolutionRunner):
                             f"{self.completed_generations}/{target_gens}"
                         )
 
-                    # 2.1 停滞检测（基于当前 best_fitness_tuple）
+                    # 2.1 Stagnation detection (based on current best_fitness_tuple).
                     current_best_tuple = self._get_current_best_tuple()
                     if current_best_tuple is not None:
                         if self._check_exploration_stagnation(current_best_tuple):
@@ -4977,19 +4974,19 @@ class AutoformalizationRunner(EvolutionRunner):
                                 )
                                 break
 
-                # 3) 预算检测（硬停）
+                # 3) Budget check (hard stop).
                 budget_reason = self._check_budget_exhausted()
                 if budget_reason is not None:
                     self.termination_reason = budget_reason
                     logger.info(f"[Termination] Budget exhausted: {budget_reason}")
                     break
 
-                # 4) 检查是否已完成全部代数
+                # 4) Check whether all generations completed.
                 if self.completed_generations >= target_gens:
                     logger.info("All generations completed, exiting...")
                     break
 
-                # 5) 继续提交新任务（若队列有空间）
+                # 5) Submit new jobs if there's capacity.
                 if (
                     len(self.running_jobs) < max_jobs
                     and self.next_generation_to_submit < target_gens
@@ -5001,8 +4998,9 @@ class AutoformalizationRunner(EvolutionRunner):
 
     def _get_current_best_tuple(self) -> Optional[tuple]:
         """
-        从数据库中获取当前最佳 fitness_tuple（仅 compile_ok=1 程序）。
-        若不存在返回 None。
+        Get current best fitness_tuple from the DB (compile_ok=1 programs only).
+
+        Returns None if no such program exists.
         """
         best_tuple = None
         programs = self.db.get_all_programs()

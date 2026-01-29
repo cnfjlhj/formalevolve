@@ -40,10 +40,10 @@ def query_openai(
     """Query OpenAI model using Chat Completions API."""
     new_msg_history = msg_history + [{"role": "user", "content": msg}]
 
-    # 构建消息列表
+    # Build the message list.
     messages = [{"role": "system", "content": system_msg}] + new_msg_history
 
-    # 处理 kwargs：将 max_output_tokens 转换为 max_tokens（兼容性）
+    # Normalize kwargs: map `max_output_tokens` -> `max_tokens` (compatibility).
     api_kwargs = {}
     if "max_output_tokens" in kwargs:
         api_kwargs["max_tokens"] = kwargs.pop("max_output_tokens")
@@ -55,7 +55,7 @@ def query_openai(
         # vLLM OpenAI-compatible servers may support `seed` for deterministic sampling.
         api_kwargs["seed"] = kwargs["seed"]
     if "reasoning" in kwargs:
-        # OpenAI reasoning 模型参数（可能需要特殊处理）
+        # OpenAI reasoning-model parameter (may need special handling).
         kwargs.pop("reasoning")
 
     if output_model is None:
@@ -67,7 +67,7 @@ def query_openai(
         content = response.choices[0].message.content
         new_msg_history.append({"role": "assistant", "content": content})
     else:
-        # 结构化输出 - 使用标准 API
+        # Structured output (uses standard API).
         response = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -76,7 +76,7 @@ def query_openai(
         content = response.choices[0].message.content
         new_msg_history.append({"role": "assistant", "content": content})
 
-    # 计算成本
+    # Compute cost.
     input_tokens = response.usage.prompt_tokens
     output_tokens = response.usage.completion_tokens
     # For custom models (e.g., vLLM), use default pricing (0 cost)

@@ -1,6 +1,6 @@
 defaults:
-  - override /database@_global_: island_small  # 使用小型数据库配置
-  - override /evolution@_global_: low_rpm_config  # 使用低RPM配置
+  - override /database@_global_: island_small  # use a small database config
+  - override /evolution@_global_: low_rpm_config  # use low-RPM evolution config
   - override /task@_global_: circle_packing
   - override /cluster@_global_: local
   - _self_

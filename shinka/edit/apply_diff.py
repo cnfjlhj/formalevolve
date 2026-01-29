@@ -114,13 +114,14 @@ def _extract_lean_fallback(raw: str) -> Optional[str]:
 
 def _mutable_ranges(text: str) -> list[tuple[int, int]]:
     """Return index ranges that are legal to edit."""
-    # 修改前（导致 Lean EVOLVE-BLOCK 粘连 bug）：
-    # - 使用 `m.end()` 作为可编辑区间起点，会落在 START marker 行内（未跨过换行）。
-    # - 当 patch 输出里出现 `-- EVOLVE-BLOCK-STARTtheorem ...` 这种粘连时，
-    #   apply_full/apply_diff 的拼接会把 `theorem` 留在注释行内，最终触发 Empty statement。
+    # Before (caused a Lean EVOLVE-BLOCK marker "gluing" bug):
+    # - Using `m.end()` as the editable-range start could land inside the START marker line
+    #   (i.e., before the following newline).
+    # - If the patch output contains something like `-- EVOLVE-BLOCK-STARTtheorem ...` (marker glued to `theorem`),
+    #   the apply_full/apply_diff concatenation keeps `theorem` on the comment line and triggers "Empty statement".
     #
-    # 修改后：
-    # - start 必须推进到“下一次换行后”，确保 mutable payload 从下一行开始。
+    # After:
+    # - `start` must advance to *after the next newline*, so the mutable payload begins on the next line.
     spans: list[tuple[int, int]] = []
     stack: list[int] = []
 

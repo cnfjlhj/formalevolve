@@ -1,10 +1,12 @@
 # Cycle Consistency Autoformalization
 
-基于论文 ["Improving autoformalization via cycle consistency and incremental type-checking using language-model probabilistic programs"](https://arxiv.org/abs/...) (MATH-AI 2025) 的简单实现。
+A lightweight implementation inspired by
+["Improving autoformalization via cycle consistency and incremental type-checking using language-model probabilistic programs"](https://arxiv.org/abs/...)
+(MATH-AI 2025).
 
-## 核心思想
+## Core idea
 
-Cycle Consistency 通过"反向翻译"来评估形式化的质量：
+Cycle consistency evaluates a formalization by "back-translation":
 
 ```
 Informal Statement ──[formalize]──> Formal Candidates
@@ -20,55 +22,55 @@ Informal Statement ──[formalize]──> Formal Candidates
                                     Best Candidate
 ```
 
-好的形式化 → 反向翻译后应该接近原文 → 高分
-错误的形式化 → 反向翻译后会有偏差 → 低分
+Good formalization → back-translation matches the original statement → high score
+Incorrect formalization → back-translation drifts away → low score
 
-## 目录结构
+## Directory structure
 
 ```
 autoformalization-cycle-consistency/
 ├── src/
 │   ├── __init__.py
-│   ├── config.py           # 配置
-│   ├── model_interface.py  # 模型接口抽象
-│   └── cycle_consistency.py # 核心实现
+│   ├── config.py            # configuration
+│   ├── model_interface.py   # model interface abstraction
+│   └── cycle_consistency.py # core implementation
 ├── examples/
-│   ├── demo_with_dummy.py      # 用假模型测试流程
-│   └── demo_with_real_models.py # 用真实模型运行
+│   ├── demo_with_dummy.py       # smoke test with dummy models
+│   └── demo_with_real_models.py # run with real models
 ├── configs/
 └── README.md
 ```
 
-## 快速开始
+## Quickstart
 
-### 1. 测试流程（不需要模型）
+### 1) Smoke test (no model required)
 
 ```bash
 cd examples
 python demo_with_dummy.py
 ```
 
-### 2. 用真实模型运行
+### 2) Run with real models
 
-首先部署模型（例如用 vLLM）：
+First, deploy models (e.g., via vLLM):
 
 ```bash
-# 终端1: 部署形式化模型
+# Terminal 1: serve the formalizer model
 vllm serve deepseek-ai/DeepSeek-R1-Distill-Llama-70B --port 8000
 
-# 终端2: 部署反向翻译模型
+# Terminal 2: serve the informalizer (back-translation) model
 vllm serve meta-llama/Llama-3.2-3B-Instruct --port 8001
 ```
 
-然后修改 `examples/demo_with_real_models.py` 中的配置并运行：
+Then update the config in `examples/demo_with_real_models.py` and run:
 
 ```bash
 python demo_with_real_models.py
 ```
 
-## 使用方法
+## Usage
 
-### 基本用法
+### Basic usage
 
 ```python
 from src import (
@@ -77,7 +79,7 @@ from src import (
     Config,
 )
 
-# 1. 创建模型
+# 1) Create models
 formalizer = OpenAICompatibleLLM(
     model="deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
     base_url="http://localhost:8000/v1",
@@ -87,13 +89,13 @@ informalizer = OpenAICompatibleLLM(
     base_url="http://localhost:8001/v1",
 )
 
-# 2. 创建 Cycle Consistency 实例
+# 2) Create the cycle-consistency wrapper
 cc = CycleConsistencyAutoformalization(
     formalizer=formalizer,
     informalizer=informalizer,
 )
 
-# 3. 运行自动形式化
+# 3) Run autoformalization
 result = cc.autoformalize(
     "For all positive integers n, n squared is greater than or equal to n."
 )
@@ -102,18 +104,18 @@ print(result.best_formalization)
 # theorem forall_n_sq_ge_n (n : ℕ) (h : n > 0) : n^2 ≥ n := by sorry
 ```
 
-### 使用 HuggingFace 模型（本地 GPU）
+### HuggingFace models (local GPU)
 
 ```python
 from src import HuggingFaceLLM
 
-# 直接加载模型到 GPU
+# Load the model on GPU
 informalizer = HuggingFaceLLM(
     model_name="meta-llama/Llama-3.2-3B-Instruct",
     device="auto",
 )
 
-# compute_log_prob 会精确计算 log probability
+# compute_log_prob computes exact log probability
 score = informalizer.compute_log_prob(
     prompt="Informalize: theorem (n : ℕ) : n^2 ≥ n",
     completion="For all natural numbers n, n squared is at least n.",
@@ -121,16 +123,16 @@ score = informalizer.compute_log_prob(
 print(f"Log prob: {score.log_prob}, Tokens: {score.num_tokens}")
 ```
 
-### 自定义配置
+### Custom configuration
 
 ```python
 from src import Config
 
 config = Config()
-config.model.num_candidates = 10      # 生成更多候选
-config.model.temperature = 0.8        # 更高多样性
-config.cycle_consistency.normalize_by_length = True  # 按长度归一化分数
-config.verbose = True                 # 打印详细日志
+config.model.num_candidates = 10      # generate more candidates
+config.model.temperature = 0.8        # higher diversity
+config.cycle_consistency.normalize_by_length = True  # length-normalized scores
+config.verbose = True                 # verbose logs
 
 cc = CycleConsistencyAutoformalization(
     formalizer=formalizer,
@@ -139,32 +141,33 @@ cc = CycleConsistencyAutoformalization(
 )
 ```
 
-## 模型接口
+## Model interfaces
 
-提供三种模型接口：
+Three backends are provided:
 
-| 接口 | 说明 | 依赖 |
+| Interface | Description | Dependencies |
 |------|------|------|
-| `OpenAICompatibleLLM` | 用于 vLLM/Ollama 等 OpenAI 兼容 API | `openai` |
-| `HuggingFaceLLM` | 直接加载 HuggingFace 模型 | `transformers`, `torch` |
-| `DummyLLM` | 测试用，返回假数据 | 无 |
+| `OpenAICompatibleLLM` | OpenAI-compatible API (e.g., vLLM/Ollama) | `openai` |
+| `HuggingFaceLLM` | Load a HuggingFace model directly | `transformers`, `torch` |
+| `DummyLLM` | Testing only, returns fake data | none |
 
-你也可以实现自己的接口，只需继承 `LLMInterface` 并实现 `generate()` 和 `compute_log_prob()` 方法。
+You can also implement your own backend by subclassing `LLMInterface` and implementing
+`generate()` and `compute_log_prob()`.
 
-## 依赖
+## Dependencies
 
 ```bash
-# 最小依赖
+# Minimal dependency
 pip install openai
 
-# 如果要用 HuggingFace 模型
+# If you want to use HuggingFace models
 pip install transformers torch
 
-# 推荐：用 vLLM 部署模型
+# Recommended: serve models via vLLM
 pip install vllm
 ```
 
-## 论文引用
+## Citation
 
 ```bibtex
 @inproceedings{barbadacosta2025improving,
@@ -178,11 +181,11 @@ pip install vllm
 }
 ```
 
-## 扩展
+## Extensions
 
-这个实现只包含 Cycle Consistency 部分。论文还有：
+This implementation covers cycle consistency only. The paper also includes:
 
-- **增量类型检查 (Incremental Type-Checking)**: 需要与 Lean 4 集成
-- **SMC 采样**: 需要 GenLM 框架
+- **Incremental Type-Checking**: requires integration with Lean 4
+- **SMC sampling**: requires the GenLM framework
 
-如果需要完整复现，可以参考 [GenLM](https://github.com/genlm/genlm-control) 库。
+For a full reproduction, see the [GenLM](https://github.com/genlm/genlm-control) library.

@@ -1,17 +1,16 @@
 """
+Configuration for the legacy autoformalization baselines.
 
-# Kimina-specific configurations
-KIMINA_MAX_TOKENS = 2048  # Kimina needs more tokens for complex problems
-KIMINA_OUTPUT_CLEANUP = True  # Enable cleanup for Kimina's comment-heavy output
+Original experiment setup:
+- Dataset: PAug/ProofNetSharp, first 10 problems of the test split.
+- Unified budget: 12 LLM calls across three methods:
+  - Naive: sample 12 candidates in one shot.
+  - Rewrite-only: 4 initial + 2 rewrite rounds × 4 = 12.
+  - Evolution: 4 initial + 2 evolution rounds × 4 offspring = 12.
 
-Configuration for Autoformalization Experiment.
-
-按照 要求.md 定义的实验设定:
-- 数据集: PAug/ProofNetSharp, test split 前 10 个样本
-- 三种方法统一 12 次 LLM 调用预算:
-  - Naive: 一次性采样 12 个 candidate
-  - Rewrite-only: 初代 4 个 + 2 轮 rewrite, 每轮 4 个 → 4 + 2×4 = 12
-  - Evolution: 初代 4 个 + 2 轮 evolution, 每轮 4 个 offspring → 4 + 2×4 = 12
+Kimina-specific defaults:
+- KIMINA_MAX_TOKENS = 2048
+- KIMINA_OUTPUT_CLEANUP = True
 """
 
 from dataclasses import dataclass
@@ -27,7 +26,7 @@ class Config:
     # =========================================================================
     dataset_name: str = "PAug/ProofNetSharp"
     dataset_split: str = "test"
-    num_problems: int = 10  # 前 10 个样本
+    num_problems: int = 10  # first 10 problems
 
     # =========================================================================
     # LLM Configuration
@@ -40,27 +39,27 @@ class Config:
     max_tokens: int = 1536
 
     # =========================================================================
-    # Budget Configuration (统一 12 次 LLM 调用)
+    # Budget Configuration (unified 12 LLM calls)
     # =========================================================================
-    # Naive: 一次性采样 12 个
+    # Naive: sample 12 candidates in one shot
     naive_n: int = 12
 
-    # Rewrite-only: 初代 4 + 2轮×4 = 12
-    rewrite_init: int = 4      # 初代采样数
-    rewrite_rounds: int = 2     # rewrite 轮数
-    rewrite_per_round: int = 4  # 每轮 rewrite 数
+    # Rewrite-only: 4 initial + 2 rounds × 4 = 12
+    rewrite_init: int = 4      # initial samples
+    rewrite_rounds: int = 2     # number of rewrite rounds
+    rewrite_per_round: int = 4  # rewrites per round
 
-    # Evolution: 初代 4 + 2轮×4 = 12
-    evolve_init: int = 4        # 初代采样数
-    evolve_rounds: int = 2      # evolution 轮数
-    evolve_offspring: int = 4   # 每轮 offspring 数
+    # Evolution: 4 initial + 2 rounds × 4 = 12
+    evolve_init: int = 4        # initial samples
+    evolve_rounds: int = 2      # number of evolution rounds
+    evolve_offspring: int = 4   # offspring per round
 
     # =========================================================================
     # Evaluation Configuration
     # =========================================================================
-    compile_timeout: int = 60   # Lean 编译超时 (秒)
-    use_beq_plus: bool = True   # 启用 BEq+ 等价检查
-    lambda_beq: float = 0.5     # BEq+ 奖励权重
+    compile_timeout: int = 60   # Lean compile timeout (seconds)
+    use_beq_plus: bool = True   # enable BEq+ equivalence check
+    lambda_beq: float = 0.5     # BEq+ reward weight
 
     # =========================================================================
     # Results Configuration
@@ -87,7 +86,7 @@ open scoped BigOperators"""
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# GENERATION: 初始生成 (Kimina 原生格式)
+# GENERATION: initial generation (Kimina-style)
 # -----------------------------------------------------------------------------
 GENERATION_PROMPT = """Please autoformalize the following problem in Lean 4 with the given header.
 
@@ -101,7 +100,7 @@ Write ONLY the theorem statement. Start with `theorem` or `lemma` and end with `
 
 
 # -----------------------------------------------------------------------------
-# REWRITE: 基于 feedback 修正 (单亲 self-refine)
+# REWRITE: fix based on feedback (single-parent self-refine)
 # -----------------------------------------------------------------------------
 REWRITE_PROMPT = """You are given a Lean 4 formalization attempt that failed verification. Analyze the error and fix it.
 
@@ -124,7 +123,7 @@ Start with `theorem` or `lemma` and end with `:= by sorry`."""
 
 
 # -----------------------------------------------------------------------------
-# EVOLUTION: 多亲 crossover (核心改进)
+# EVOLUTION: multi-parent crossover (core improvement)
 # -----------------------------------------------------------------------------
 EVOLUTION_PROMPT = """You are given multiple formalization attempts for the same problem, each with different strengths and weaknesses.
 
@@ -155,7 +154,7 @@ Start with `theorem` or `lemma` and end with `:= by sorry`."""
 
 
 # -----------------------------------------------------------------------------
-# META_RECOMMENDATION: 元层面的优化建议 (可选，用于多轮进化)
+# META_RECOMMENDATION: meta-level recommendations (optional; multi-round evolution)
 # -----------------------------------------------------------------------------
 META_RECOMMENDATION_PROMPT = """Based on the evolution history, provide recommendations for the next generation.
 

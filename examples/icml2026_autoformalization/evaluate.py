@@ -2,45 +2,39 @@
 Evaluator for Lean4 Autoformalization using ShinkaEvolve.
 
 ================================================================================
-                              设计理念概述
+                               Design Overview
 ================================================================================
 
-本文件是 autoformalization 系统的"评估器"，负责判断一个 Lean4 statement 的质量。
+This file is the evaluator used by the autoformalization system. It scores a Lean 4 candidate
+statement/file and returns metrics that act as the evolutionary fitness signal.
 
-【核心设计思想】
-进化搜索需要一个"适应度函数"来评判候选解的好坏。在 autoformalization 任务中，
-我们的候选解是 Lean4 定理声明，适应度由以下因素决定：
+Core metrics (ordered by importance)
+1. compile_ok: compiles successfully (hard gate)
+2. beq_ok: formal equivalence via BEq+ (if enabled; compared to ground truth)
+3. semantic_ok: semantic agreement via LLM-as-a-judge (optional; can be noisy)
+4. cycle_score: cycle-consistency soft signal (optional; typically weaker than semantic)
+5. potential: reserved field (currently fixed to 0)
 
-1. compile_ok (编译通过) - 最重要，是"硬门槛"
-2. beq_ok (形式等价) - 最高标准（若启用；与 ground truth 对比）
-3. semantic_ok (语义一致) - 次高标准（LLM-as-a-judge，可能误判）
-4. cycle_score (cycle-consistency) - 连续 soft signal（比 semantic 更弱，用于提供细粒度选择压力）
-5. potential (潜力分) - 预留接口，当前固定为 0
+Why use "gated" scoring?
+A naive weighted sum can rank a non-compiling candidate above a compiling one if the soft
+signals are high. That violates the basic principle: invalid programs should not be competitive.
+We therefore gate all soft signals behind compile_ok.
 
-【为什么用"门控"设计？】
-传统做法是把所有指标加权求和，但这会导致一个问题：
-- 一个编译失败但"语义很像"的候选，可能比编译成功但语义差的候选分数更高
-- 这违反了进化搜索的基本原则：无效程序不应该有竞争力
-
-所以我们用"门控"设计：
-- compile_ok = 0 时，整个分数直接为 0，不管其他指标多好
-- 这保证了进化压力始终朝着"先编译通过"的方向
-
-【约束满足】
-- [D] 编译检查必须在 {header} + {body} 拼接后的完整文件上执行
-- [F] compile_ok=0 的候选在排序上永远劣于 compile_ok=1 的候选
+Spec constraints
+- [D] Compile checks must run on the full file `{header} + {body}`.
+- [F] Candidates with compile_ok=0 must always rank below compile_ok=1.
 
 ================================================================================
-                              规约版本: v1.1
+                              Spec Version: v1.1
 ================================================================================
 """
 
 # =============================================================================
-# 标准库导入
+# Standard library imports
 # =============================================================================
 import argparse
 import asyncio
-import importlib.util   # 用于动态加载候选程序模块
+import importlib.util  # dynamic loading for candidate program modules
 import json
 import math
 import os
@@ -75,16 +69,15 @@ try:
 except Exception:
     OpenAICompatibleLLM = None  # type: ignore
 # =============================================================================
-# 环境初始化（必须在其他导入之前）
+# Environment init (must happen before other imports)
 # =============================================================================
-# 必须最先加载 .env，因为后续的 API 调用依赖环境变量中的密钥
-# 如：OPENAI_API_KEY、ANTHROPIC_API_KEY 等
+# Load .env first because subsequent API calls rely on env vars like OPENAI_API_KEY, etc.
 from dotenv import load_dotenv
 env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 
-# 设置 Lean 缓存目录（lean_interact 会写入 lock / tmp project）。
-# 在 sandbox 环境下，用户家目录可能不可写，因此必须选择一个可写路径。
+# Configure Lean cache directories (`lean_interact` writes lock/tmp projects).
+# In sandboxed environments, the home directory may be read-only, so pick a writable path.
 PROJECT_CACHE_DIR = Path(__file__).parent / ".lean_interact_cache"
 TMP_CACHE_DIR = Path("/tmp/lean_interact_cache_autoformal")
 MATHLIB_CACHE = Path(os.environ.get("MATHLIB_CACHE_DIR", "~/.cache/mathlib")).expanduser()
@@ -115,7 +108,7 @@ def _pick_writable_cache_dir() -> Path:
 cache_dir = _pick_writable_cache_dir()
 os.environ["LEAN_INTERACT_CACHE_DIR"] = str(cache_dir)
 
-# 覆盖 lean_interact 默认 cache 路径
+# Override lean_interact default cache path.
 try:
     import lean_interact.utils as li_utils
     import lean_interact.project as li_project
@@ -127,10 +120,9 @@ try:
 except Exception:
     pass
 
-# 添加项目路径，使得可以 import 其他模块
-# 【为什么需要手动添加路径？】
-# 因为 evaluate.py 是作为子进程独立运行的，它的工作目录可能不是项目根目录，
-# 所以需要显式添加路径才能找到 ShinkaEvolve 和 autoformalization 模块。
+# Add project root to sys.path so subprocess execution can import local modules.
+# `evaluate.py` is invoked as a standalone subprocess, so its working directory may not
+# be the project root.
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 # Optional: allow local BEq+ checkout without hard-coding personal paths.
@@ -140,26 +132,26 @@ if BEQ_PLUS_PATH:
     sys.path.insert(0, BEQ_PLUS_PATH)
 
 # =============================================================================
-# ShinkaEvolve 框架导入
+# ShinkaEvolve imports
 # =============================================================================
-# run_shinka_eval: ShinkaEvolve 提供的标准评估入口
-# 它会：1) 加载候选程序 2) 执行 3) 收集结果 4) 调用 aggregate_metrics
+# run_shinka_eval: the standard ShinkaEvolve evaluation entrypoint.
+# It: (1) loads the candidate program (2) executes it (3) collects outputs (4) calls aggregate_metrics.
 from shinka.core import run_shinka_eval
 from shinka.core.wrap_eval import save_json_results
 
 # =============================================================================
-# Autoformalization 模块导入
+# Autoformalization imports
 # =============================================================================
-# 这些是我们复用的已有模块，提供 Lean4 相关功能：
-# - lean_env: Lean4 编译服务器（使用 lean-interact 库）
-# - critic_wrapper: CriticLean 语义检查（LLM-based）
+# Reused modules providing Lean 4 functionality:
+# - lean_env: Lean 4 compilation server (via lean-interact)
+# - critic_wrapper: CriticLean semantic judge (LLM-based)
 from autoformalization.lean_env import get_lean_server, is_lean_server_available
 from autoformalization.models import Candidate, Problem
 from autoformalization.critic_wrapper import critic_eval, close_session
 
 
 # =============================================================================
-# 配置加载
+# Config loading
 # =============================================================================
 
 _CONFIG_CONTEXT_RESULTS_DIR: Optional[str] = None
@@ -221,22 +213,22 @@ def _find_problem_config_path(results_dir: Optional[str] = None) -> Optional[Pat
 
 def get_config(results_dir: Optional[str] = None) -> Dict[str, Any]:
     """
-    加载评估配置。
+    Load evaluator config.
 
-    配置来源（按优先级）：
-    1. problem_config.json 文件（由 run_evo.py 在启动时创建）
-    2. 环境变量（备用）
+    Config sources (in priority order):
+    1. `problem_config.json` (created by `run_evo.py` at run start)
+    2. Environment variables (fallback)
 
-    配置项说明：
-    - informal: 自然语言数学陈述，需要被形式化
-    - header: Lean4 的 import 和 open 语句，作为上下文
-    - ground_truth: 标准答案（可选，用于 BEq+ 检查）
-    - use_beq: 是否启用 BEq+ 等价性检查
-    - compile_timeout: 编译超时时间（秒）
+    Key fields:
+    - informal: natural-language statement to formalize
+    - header: Lean 4 header (imports/opens/options)
+    - ground_truth: optional reference statement (for BEq+)
+    - use_beq: enable BEq+ equivalence checking
+    - compile_timeout: compile timeout (seconds)
     """
     config_path = _find_problem_config_path(results_dir)
 
-    # 优先从配置文件加载（支持 per-results_dir 隔离）
+    # Prefer loading from config file (supports per-results_dir isolation).
     if config_path and config_path.exists():
         with open(config_path) as f:
             config = json.load(f)
@@ -352,7 +344,7 @@ def get_config(results_dir: Optional[str] = None) -> Dict[str, Any]:
             ),
         })
 
-    # 备用：从环境变量加载
+    # Fallback: load from env vars.
     return _apply_semantic_overrides({
         "informal": os.environ.get("AUTOFORMAL_INFORMAL", ""),
         "header": os.environ.get(
@@ -504,41 +496,41 @@ def cycle_consistency_score(
 
 
 # =============================================================================
-# 错误类型提取（用于 repair prompt）
+# Compile error type extraction (for repair prompts)
 # =============================================================================
 
 def extract_compile_error_type(error_msg: str) -> str:
     """
-    从 Lean 编译错误信息中提取错误类型。
+    Extract a coarse error type from a Lean compile error message.
 
-    【设计目的】
-    当编译失败触发 repair 时，我们需要告诉 LLM 是什么类型的错误，
-    这样 LLM 可以更有针对性地修复。
+    Design goal
+    When compilation fails and triggers repair, we want to tell the LLM what kind of
+    error it is, so the repair prompt can be more targeted.
 
-    【错误分类】
-    - type_mismatch: 类型不匹配，通常是参数类型错误
-    - unknown_identifier: 未知标识符，可能是拼写错误或缺少 import
-    - unbound_variable: 未绑定变量，通常是作用域问题
-    - syntax_error: 语法错误，如缺少 :=
-    - typeclass_error: 类型类实例合成失败
-    - ambiguous_identifier: 标识符歧义，需要更明确的类型注解
-    - invalid_syntax: 无效语法
-    - timeout: 编译超时
-    - import_error: 导入错误
-    - other: 其他未分类错误
+    Error categories
+    - type_mismatch: type mismatch (often wrong argument types)
+    - unknown_identifier: unknown identifier/constant (typo or missing import/open)
+    - unbound_variable: unbound variable / not in scope (scoping issue)
+    - syntax_error: syntax error (e.g., missing `:=`)
+    - typeclass_error: typeclass synthesis failure
+    - ambiguous_identifier: ambiguous identifier (needs more type annotations)
+    - invalid_syntax: invalid syntax
+    - timeout: compile timeout
+    - import_error: import error
+    - other: uncategorized
 
-    【为什么要分类？】
-    不同类型的错误需要不同的修复策略：
-    - type_mismatch → 检查类型注解
-    - unknown_identifier → 检查拼写或添加 import
-    - syntax_error → 检查语法结构
+    Why categorize?
+    Different errors call for different repair strategies:
+    - type_mismatch → revisit type annotations / arguments
+    - unknown_identifier → check spelling or add imports/opens
+    - syntax_error → fix syntax structure
     """
     if not error_msg:
         return "unknown"
 
     error_lower = error_msg.lower()
 
-    # 按照常见程度排序的 Lean4 错误模式
+    # Lean 4 error patterns (roughly in order of frequency).
     if "type mismatch" in error_lower:
         return "type_mismatch"
     elif "unknown identifier" in error_lower or "unknown constant" in error_lower:
@@ -563,12 +555,11 @@ def extract_compile_error_type(error_msg: str) -> str:
 
 def truncate_error_msg(error_msg: str, max_len: int = 500) -> str:
     """
-    截断错误信息，避免 prompt 过长。
+    Truncate error messages to keep prompts short.
 
-    【为什么要截断？】
-    Lean 的错误信息可能非常长（包含完整的类型推导过程），
-    但对于 repair 来说，前 500 字符通常已经包含了关键信息。
-    过长的错误信息会浪费 token，影响 LLM 的理解。
+    Lean error messages can be very long (e.g., full type inference traces), but for repair,
+    the first ~500 characters usually contain the crucial signal. Extremely long errors waste
+    tokens and can degrade LLM understanding.
     """
     if not error_msg:
         return ""
@@ -598,7 +589,7 @@ LEAN_DECL_KEYWORDS = [
 
 def remove_lean_comments(text: str) -> str:
     """
-    移除 Lean 注释（单行和多行）。
+    Remove Lean comments (single-line and block).
     """
     text = re.sub(r"/-(.|\n)*?-/\s*", "", text)
     text = "\n".join([line.split("--")[0].rstrip() for line in text.splitlines()])
@@ -606,7 +597,7 @@ def remove_lean_comments(text: str) -> str:
 
 
 def strip_header_lines(text: str) -> str:
-    """移除 import/open/open scoped 行，避免 header 重复。"""
+    """Strip import/open/open scoped lines to avoid header duplication."""
     cleaned = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -621,7 +612,7 @@ def strip_header_lines(text: str) -> str:
 
 
 def strip_evolve_markers(text: str) -> str:
-    """移除 EVOLVE-BLOCK 标记行。"""
+    """Strip EVOLVE-BLOCK marker lines."""
     cleaned = []
     for line in text.splitlines():
         if re.match(r"^\s*(?:#|//|--)?\s*EVOLVE-BLOCK-(?:START|END)\s*$", line):
@@ -631,17 +622,18 @@ def strip_evolve_markers(text: str) -> str:
 
 
 def extract_first_declaration(text: str) -> str:
-    """提取第一条 Lean 顶层声明。
+    """Extract the first top-level Lean declaration.
 
-    【修复】当找不到声明时返回空字符串而非原始文本，
-    避免 'none' 等无效输出被当作有效 statement 流转。
+    Fix: when no declaration is found, return an empty string instead of the raw text,
+    so placeholders like 'none' are not treated as valid statements downstream.
 
-    【语义评估偏好】
-    对 semantic_ok（CriticLean）而言，我们希望对 *theorem/lemma* 做一致性判断。
-    实际模型输出里可能会先定义一些辅助 `def` / `abbrev`，再给出 `theorem`。
-    这时若直接取“第一条声明”，会把 `def` 误当作 formal statement，导致
-    semantic_ok 发生系统性误判。
-    因此这里优先提取第一条 theorem/lemma；若不存在，再回退到第一条任意声明。
+    Semantic-eval preference:
+    For semantic_ok (CriticLean), we want to judge consistency on a *theorem/lemma*.
+    In practice, models may emit helper `def` / `abbrev` declarations before the final theorem.
+    If we always take "the first declaration", we might accidentally judge a helper `def` as
+    the formal statement, which leads to systematic semantic_ok errors.
+    We therefore prefer the first theorem/lemma; if none exists, we fall back to the first
+    declaration of any kind.
     """
     if not text:
         return ""
@@ -663,7 +655,7 @@ def extract_first_declaration(text: str) -> str:
                 decl_idx = i
                 break
     if decl_idx is None:
-        return ""  # 【修复】找不到声明时返回空字符串
+        return ""  # Fix: return empty string when no declaration is found.
     start = decl_idx
     while start > 0 and lines[start - 1].lstrip().startswith("@["):
         start -= 1
@@ -677,14 +669,14 @@ def extract_first_declaration(text: str) -> str:
 
 
 def normalize_lean_statement(text: str) -> str:
-    """清理模型输出并抽取可编译的 Lean statement。
+    """Normalize a model response into a compilable Lean statement.
 
-    【修复】增加占位符过滤，阻断 'none' 等无效输出。
+    Fix: filter common placeholders to block invalid "no result" outputs like 'none'.
     """
     if not text:
         return ""
 
-    # 【修复】过滤常见占位符（模型可能输出这些作为"无结果"标记）
+    # Fix: filter common placeholders (models sometimes emit these as "no result" markers).
     INVALID_PLACEHOLDERS = {"none", "null", "nil", "n/a", "na", ""}
     text_lower = text.strip().lower()
     if text_lower in INVALID_PLACEHOLDERS:
@@ -695,7 +687,7 @@ def normalize_lean_statement(text: str) -> str:
     cleaned = strip_evolve_markers(cleaned)
     result = extract_first_declaration(cleaned)
 
-    # 【修复】再次检查结果是否为占位符
+    # Fix: re-check the extracted statement for placeholders.
     if result and result.strip().lower() in INVALID_PLACEHOLDERS:
         return ""
 
@@ -839,7 +831,7 @@ def strip_theorem_keyword_for_cycle_prompt(formal_statement: str) -> str:
 
 
 # =============================================================================
-# Lean 编译检查
+# Lean compilation check
 # =============================================================================
 
 def check_lean_compile(
@@ -848,15 +840,15 @@ def check_lean_compile(
     lean_server_url: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """
-    检查 Lean 代码是否能编译通过。
+    Check whether Lean code compiles successfully.
 
-    说明：
-    - 现在候选应输出「完整 Lean 文件」（imports + theorem）。
-    - 编译检查直接对完整代码执行（而不是外部 header + body 拼接）。
+    Notes:
+    - Candidates are expected to output a *complete Lean file* (imports + theorem).
+    - The compile check runs on the full code directly (no external header+body concatenation).
 
-    【返回值】
-    - (True, "") 表示编译成功
-    - (False, error_msg) 表示编译失败，error_msg 包含错误信息
+    Returns:
+    - (True, "") on success
+    - (False, error_msg) on failure
     """
     # This project primarily relies on local compilation via `lean_interact`.
     # An HTTP Lean server may exist in some environments, but is optional.
@@ -872,7 +864,7 @@ def check_lean_compile(
     if not full_code:
         return False, "Empty Lean code"
 
-    # 基本结构检查：必须包含一个顶层声明关键字
+    # Basic structural check: must contain at least one top-level declaration keyword.
     if not any(kw in full_code for kw in LEAN_DECL_KEYWORDS):
         return False, "Missing Lean declaration keyword"
 
@@ -917,22 +909,22 @@ def check_lean_compile(
         response.raise_for_status()
         result = response.json()
 
-        # 解析结果
+        # Parse result.
         if "results" not in result or len(result["results"]) == 0:
             return False, "No results from Lean server"
 
         check_result = result["results"][0]
         messages = check_result.get("response", {}).get("messages", [])
 
-        # 检查是否有 error 级别的消息
+        # Check for error-level messages.
         errors = [m for m in messages if m.get("severity") == "error"]
 
         if errors:
-            # 提取错误信息
+            # Extract error messages.
             error_msgs = [e.get("data", "Unknown error") for e in errors]
             return False, "\n".join(error_msgs)
 
-        # 没有错误，编译成功
+        # No errors: compile succeeded.
         return True, ""
 
     except requests.exceptions.Timeout:
@@ -946,28 +938,28 @@ def check_lean_compile(
 
 
 # =============================================================================
-# CriticLean 语义检查
+# CriticLean semantic check
 # =============================================================================
 
 async def check_critic_lean(informal: str, formal: str) -> Tuple[int, str]:
     """
-    使用 CriticLean 检查语义一致性。
+    Use CriticLean to check semantic consistency.
 
-    【设计目的】
-    编译通过只能保证语法正确，但不能保证数学含义正确。
-    CriticLean 是一个 LLM-based 的语义检查器，它会：
-    1. 分析 informal statement 的数学含义
-    2. 分析 formal statement 的数学含义
-    3. 比较两者是否一致
+    Motivation:
+    Compiling successfully only guarantees syntactic correctness, not mathematical correctness.
+    CriticLean is an LLM-based semantic judge that:
+    1) interprets the informal statement
+    2) interprets the formal statement
+    3) decides whether they match
 
-    【为什么只在 compile_ok=1 时调用？】
-    1. 编译失败的 statement 可能语法残缺，语义检查没有意义
-    2. 节省 API 调用成本
-    3. 符合"词典序 gating"的设计原则
+    Why only call it when compile_ok=1?
+    1) If compilation fails, the statement may be incomplete and semantic checking is meaningless
+    2) Saves API cost
+    3) Matches the lexicographic / gated design
 
-    【返回值】
-    - (1, reason) 表示语义一致
-    - (0, reason) 表示语义不一致或检查失败
+    Returns:
+    - (1, reason) if semantically consistent
+    - (0, reason) if inconsistent or if the check fails
     """
     if not informal:
         return 0, "[Error] No informal statement provided"
@@ -1000,26 +992,26 @@ def extract_critic_accuracy_confirmation(reasons: str) -> str:
 
 
 # =============================================================================
-# BEq+ 等价性检查（可选）
+# BEq+ equivalence check (optional)
 # =============================================================================
 
 def check_beq_plus(statement: str, ground_truth: str, header: str, timeout: int = 600) -> int:
     """
-    使用 BEq+ 检查与 ground truth 的形式等价性。
+    Use BEq+ to check formal equivalence against the ground truth.
 
-    【设计目的】
-    BEq+ 是一个高精度、低召回率的等价性检查器：
-    - 高精度：如果返回 1，几乎可以确定两个 statement 数学等价
-    - 低召回率：即使两个 statement 等价，也可能返回 0
+    Motivation:
+    BEq+ is a high-precision, low-recall equivalence checker:
+    - High precision: if it returns 1, the two statements are very likely equivalent.
+    - Low recall: even if statements are equivalent, it may still return 0.
 
-    【为什么是可选的？】
-    1. 需要 ground truth，但很多任务没有标准答案
-    2. 计算成本较高
-    3. 低召回率意味着可能错过正确答案
+    Why optional?
+    1) Requires a ground truth reference (many tasks do not have one)
+    2) Higher computational cost
+    3) Low recall means it can miss correct answers
 
-    【返回值】
-    - 1 表示等价
-    - 0 表示不等价或检查失败
+    Returns:
+    - 1 for "equivalent"
+    - 0 for "not proven equivalent" / failed check
     """
     if not ground_truth:
         return 0
@@ -1046,7 +1038,7 @@ def check_beq_plus(statement: str, ground_truth: str, header: str, timeout: int 
 
 
 # =============================================================================
-# 辅助函数
+# Helper functions
 # =============================================================================
 
 def load_code_from_program(program_path: str) -> str:
@@ -1126,7 +1118,7 @@ def validate_formalization(run_output: str, results_dir: Optional[str] = None, a
 
 
 def get_experiment_kwargs(run_index: int) -> Dict[str, Any]:
-    """为实验运行提供参数。"""
+    """Provide experiment kwargs for a run."""
     config = get_config()
     return {
         "informal": config["informal"],
@@ -1137,7 +1129,7 @@ def get_experiment_kwargs(run_index: int) -> Dict[str, Any]:
 
 
 # =============================================================================
-# 核心：门控评分函数
+# Core: gated scoring function
 # =============================================================================
 
 def compute_gated_score(
@@ -1153,16 +1145,16 @@ def compute_gated_score(
     score_beq_bonus: float = 200.0,
 ) -> float:
     """
-    计算门控适应度分数。
+    Compute the gated fitness score.
 
     ================================================================================
-                              这是整个系统的"心脏"
+                       This is the "heart" of the evaluator
     ================================================================================
 
-    【约束 F 的实现】
-    规约要求：compile_ok=0 的候选在排序上永远劣于 compile_ok=1 的候选。
+    Constraint F
+    compile_ok=0 candidates must always rank below compile_ok=1 candidates.
 
-    【公式 - 与 SPEC.md 一致（加分式，且保证 beq > semantic > cycle）】
+    Formula (aligned with SPEC.md; additive, and ensures beq > semantic > cycle):
     combined_score = compile_ok * (
         score_base
         + score_cycle_weight * cycle_score
@@ -1170,12 +1162,12 @@ def compute_gated_score(
         + score_beq_bonus * beq_ok
     )
 
-    【为什么这个公式能满足约束 F？】
-    - 当 compile_ok = 0 时，整个乘积为 0
-    - 当 compile_ok = 1 时，最低分是 score_base（默认 100）
-    - 因此任何 compile_ok=1 的候选（≥100）都优于 compile_ok=0 的候选（=0）
+    Why does this satisfy Constraint F?
+    - If compile_ok = 0, the product is 0.
+    - If compile_ok = 1, the minimum score is score_base (default 100).
+    - Therefore any compile_ok=1 candidate (>=100) beats any compile_ok=0 candidate (=0).
 
-    【分数分布 - 直觉示例（默认权重）】
+    Intuition (default weights)
     - compile_ok=0: score = 0
     - compile_ok=1, cycle=1.0, semantic=0, beq=0: score = 150
     - compile_ok=1, cycle=0.0, semantic=1, beq=0: score = 200
@@ -1183,17 +1175,17 @@ def compute_gated_score(
     - compile_ok=1, cycle=0.0, semantic=0, beq=1: score = 300
     - compile_ok=1, cycle=1.0, semantic=1, beq=1: score = 450
 
-    【权重设计】
-    - score_base=100：compile_ok=1 的基础分
-    - score_cycle_weight * cycle_score：连续信号（cycle_score∈[0,1]）
-    - score_semantic_bonus * semantic_ok：离散加分（semantic_ok∈{0,1}）
-    - score_beq_bonus * beq_ok：离散加分（beq_ok∈{0,1}）
+    Weight design
+    - score_base=100: base score for compile_ok=1
+    - score_cycle_weight * cycle_score: continuous signal (cycle_score∈[0,1])
+    - score_semantic_bonus * semantic_ok: discrete bonus (semantic_ok∈{0,1})
+    - score_beq_bonus * beq_ok: discrete bonus (beq_ok∈{0,1})
 
-    约束：为保证排序语义（beq > semantic > cycle），默认应满足：
+    Constraint: to preserve ordering semantics (beq > semantic > cycle), defaults should satisfy:
     - score_semantic_bonus > score_cycle_weight
     - score_beq_bonus > score_semantic_bonus + score_cycle_weight
     """
-    # potential 预留字段：当前不参与 combined_score（避免口径漂移）
+    # `potential` is reserved; currently excluded from combined_score to avoid spec drift.
     return float(
         int(compile_ok)
         * (
@@ -1206,7 +1198,7 @@ def compute_gated_score(
 
 
 # =============================================================================
-# 核心：评估聚合函数
+# Core: aggregate evaluation metrics
 # =============================================================================
 
 def aggregate_metrics(
@@ -1214,39 +1206,39 @@ def aggregate_metrics(
     results_dir: str,
 ) -> Dict[str, Any]:
     """
-    聚合评估结果，返回完整的 metrics 字典。
+    Aggregate evaluation results and return a full `metrics` dict.
 
     ================================================================================
-                              这是评估器的"主函数"
+                     This is the evaluator "main function"
     ================================================================================
 
-    【设计原则：词典序 gating】
-    评估顺序严格按优先级执行：
-    1. 先检查 compile_ok（最重要）
-    2. 只有 compile_ok=1 时，才计算软信号（cycle-consistency；Critic 语义检查可选）
-    3. 只有 compile_ok=1 时，才检查 beq_ok
+    Design: lexicographic gating
+    Evaluation happens in strict priority order:
+    1) Check compile_ok (most important)
+    2) Only if compile_ok=1, compute soft signals (cycle-consistency; optional Critic semantics)
+    3) Only if compile_ok=1, check beq_ok
 
-    这就是"词典序"的含义：先比较第一位，相等才比较第二位，以此类推。
+    "Lexicographic" means we compare the first dimension first; only ties compare the next, etc.
 
-    【约束满足】
-    - [D] 编译检查在 {header}+{body} 上执行（见 check_lean_compile）
-    - [F] compile_ok=0 时 score 恒为 0（见 compute_gated_score）
+    Spec constraints
+    - [D] Compile checks run on the full file (see check_lean_compile)
+    - [F] If compile_ok=0, combined_score is always 0 (see compute_gated_score)
 
-    【返回的 metrics 字典】
+    Returned metrics schema (subset)
     {
-        "compile_ok": 0 或 1,
-        "compile_error_type": 错误类型（仅当 compile_ok=0）,
-        "compile_error_msg": 错误信息（仅当 compile_ok=0）,
-        "semantic_ok": 0 或 1,
-        "critic_raw": CriticLean 的原始输出,
-        "beq_ok": 0 或 1,
-        "potential": 0.0（v1 固定）,
+        "compile_ok": 0 or 1,
+        "compile_error_type": error type (only when compile_ok=0),
+        "compile_error_msg": error message (only when compile_ok=0),
+        "semantic_ok": 0 or 1,
+        "critic_raw": raw CriticLean output,
+        "beq_ok": 0 or 1,
+        "potential": 0.0 (fixed in v1),
         "fitness_tuple": (compile_ok, beq_ok, semantic_ok, cycle_score),
-        "combined_score": 门控评分,
-        "statement": 原始 Lean statement,
+        "combined_score": gated score,
+        "statement": extracted Lean statement,
     }
     """
-    # 处理空结果的边界情况
+    # Handle the empty-results edge case.
     if not results:
         return {
             "compile_ok": 0,
@@ -1269,10 +1261,10 @@ def aggregate_metrics(
     statement = normalize_lean_statement(lean_code)
 
     config = get_config()
-    lean_server_url = config.get("lean_server_url")  # 从配置中获取 lean_server_url
+    lean_server_url = config.get("lean_server_url")  # from config
 
     # =========================================================================
-    # Step 1: Lean 编译检查
+    # Step 1: Lean compile check
     # =========================================================================
     # Compile check on the full Lean file (imports + theorem).
     compile_ok_bool, compile_error = _compile_cached(
@@ -1282,16 +1274,16 @@ def aggregate_metrics(
     )
     compile_ok = 1 if compile_ok_bool else 0
 
-    # 提取错误类型，用于后续的 repair prompt
+    # Extract error type for downstream repair prompts.
     compile_error_type = extract_compile_error_type(compile_error) if compile_error else ""
     compile_error_msg = truncate_error_msg(compile_error)
 
-    # potential 在 v1 固定为 0.0，接口保留
+    # `potential` is fixed to 0.0 in v1 (reserved interface field).
     potential = 0.0
 
-    # 初始化 metrics 字典
+    # Initialize metrics dict.
     metrics = {
-        # 核心适应度组件
+        # Core fitness components
         "compile_ok": compile_ok,
         "compile_error_type": compile_error_type,
         "compile_error_msg": compile_error_msg,
@@ -1300,7 +1292,7 @@ def aggregate_metrics(
         "beq_ok": 0,
         "potential": potential,
         "cycle_score": 0.0,
-        # 派生分数
+        # Derived scores
         "fitness_tuple": (compile_ok, 0, 0, 0.0),
         "combined_score": 0.0,
         # Raw artifacts (for repair + audit)
@@ -1310,14 +1302,14 @@ def aggregate_metrics(
     }
 
     # =========================================================================
-    # 词典序 gating: compile_ok=0 时跳过后续评估
+    # Lexicographic gating: if compile_ok=0, skip the rest
     # =========================================================================
-    # 【约束 F】compile_ok=0 时 score 恒为 0
-    # 不需要浪费 API 调用去检查语义，直接返回
+    # Constraint F: if compile_ok=0, combined_score must be 0.
+    # Avoid wasting API calls on semantic checks; return early.
     if compile_ok == 0:
         metrics["combined_score"] = 0.0
         metrics["fitness_tuple"] = (0, 0, 0, 0.0)
-        # 添加 public/private 结构（编译失败时也需要）
+        # Add public/private sections (needed even when compilation fails).
         metrics["public"] = {
             "compile_ok": 0,
             "cycle_score": 0.0,
@@ -1438,7 +1430,7 @@ def aggregate_metrics(
     metrics["cycle_score"] = float(cycle_score)
 
     # =========================================================================
-    # Step 3: BEq+ 等价性检查（可选，仅当 compile_ok=1）
+    # Step 3: BEq+ equivalence check (optional; only when compile_ok=1)
     # =========================================================================
     beq_ok = 0
     if config["use_beq"] and config["ground_truth"]:
@@ -1469,12 +1461,12 @@ def aggregate_metrics(
         )
         metrics["beq_ok"] = beq_ok
 
-    # NOTE: cycle_score 已在 Step 2+4 中计算并写入 metrics。
+    # NOTE: cycle_score is computed and written to metrics in Step 2+4.
 
     # =========================================================================
-    # 计算最终的 fitness_tuple 和门控分数（compile 是硬门槛）
+    # Compute final fitness_tuple and combined_score (compile is a hard gate)
     # =========================================================================
-    # NOTE: fitness_tuple 用于“词典序”停滞检测与审计显示，优先级为：
+    # NOTE: fitness_tuple is used for lexicographic stagnation detection and audits, priority:
     # compile_ok > beq_ok > semantic_ok > cycle_score
     metrics["fitness_tuple"] = (compile_ok, int(beq_ok), int(semantic_ok), float(cycle_score))
 
@@ -1503,17 +1495,17 @@ def aggregate_metrics(
     )
 
     # =========================================================================
-    # 添加 public/private 结构供 LLM 反馈使用
+    # Add public/private structure for LLM feedback
     # =========================================================================
-    # shinka 框架期望 metrics["public"] 包含要展示给 LLM 的指标
-    # 这些指标会通过 perf_str() 格式化后放入 ITER_MSG prompt
+    # Shinka expects metrics["public"] to contain the fields shown to the LLM; they will be
+    # formatted via perf_str() and injected into ITER_MSG prompts.
     metrics["public"] = {
         "compile_ok": compile_ok,
         "cycle_score": round(cycle_score, 4),
         "semantic_ok": int(semantic_ok),
         "beq_ok": beq_ok,
     }
-    # private 包含不展示给 LLM 的调试信息
+    # "private" holds debug fields not shown to the LLM.
     metrics["private"] = {
         "compile_error_type": compile_error_type,
         "compile_error_msg": compile_error_msg,
@@ -1521,10 +1513,10 @@ def aggregate_metrics(
     }
 
     # =========================================================================
-    # 保存详细结果到文件（便于调试和分析）
+    # Save detailed results to file (for debugging/auditing)
     # =========================================================================
     try:
-        # tuple 转 list 以便 JSON 序列化
+        # Convert tuple -> list for JSON serialization.
         metrics_for_json = metrics.copy()
         metrics_for_json["fitness_tuple"] = list(metrics["fitness_tuple"])
         with open(Path(results_dir) / "eval_details.json", "w") as f:
@@ -1536,42 +1528,42 @@ def aggregate_metrics(
 
 
 # =============================================================================
-# 主函数：评估入口
+# Main: evaluator entrypoint
 # =============================================================================
 
 def main(program_path: str, results_dir: str):
     """
-    评估器主入口。
+    Evaluator entrypoint.
 
-    由 ShinkaEvolve 框架调用，用于评估单个候选程序。
+    Called by ShinkaEvolve to evaluate a single candidate program.
 
-    【调用链路】
+    Call chain
     run_evo.py → AutoformalizationRunner → scheduler → evaluate.py:main()
 
-    【执行流程图】
+    Execution flow (diagram)
     ┌──────────────────┐
-    │ 接收参数          │  program_path: 候选程序文件
-    │ (program_path,   │  results_dir: 结果保存目录
+    │ Receive args      │  program_path: candidate program file
+    │ (program_path,    │  results_dir: output directory
     │  results_dir)    │
     └────────┬─────────┘
              ↓
     ┌──────────────────┐
-    │ run_shinka_eval  │  ShinkaEvolve 标准评估框架
-    │   ├─ 加载程序     │
-    │   ├─ 执行获取输出 │
-    │   └─ 调用聚合函数 │
+    │ run_shinka_eval  │  ShinkaEvolve evaluation harness
+    │   ├─ load program │
+    │   ├─ execute      │
+    │   └─ aggregate    │
     └────────┬─────────┘
              ↓
     ┌──────────────────┐
-    │ aggregate_metrics│  我们的核心评估逻辑
-    │   ├─ Lean 编译    │  check_lean_compile()
-    │   ├─ 语义检查     │  check_critic_lean()
-    │   ├─ BEq+ 检查    │  check_beq_plus()
-    │   └─ 门控评分     │  compute_gated_score()
+    │ aggregate_metrics│  our core evaluation logic
+    │   ├─ Lean compile │  check_lean_compile()
+    │   ├─ semantics    │  check_critic_lean()
+    │   ├─ BEq+         │  check_beq_plus()
+    │   └─ gated score  │  compute_gated_score()
     └────────┬─────────┘
              ↓
     ┌──────────────────┐
-    │ 返回 metrics     │  包含 fitness_tuple, combined_score 等
+    │ Return metrics    │  includes fitness_tuple, combined_score, etc.
     └──────────────────┘
     """
     print(f"[Evaluator] Program: {program_path}")
@@ -1596,7 +1588,7 @@ def main(program_path: str, results_dir: str):
         correct, error_msg = validate_formalization(code, results_dir=results_dir)
         save_json_results(results_dir, metrics, correct, error_msg)
     else:
-        # 调用 ShinkaEvolve 的评估框架
+        # Invoke ShinkaEvolve's evaluation harness.
         metrics, correct, error_msg = run_shinka_eval(
             program_path=program_path,
             results_dir=results_dir,
@@ -1607,8 +1599,8 @@ def main(program_path: str, results_dir: str):
             aggregate_metrics_fn=_aggregator,
         )
 
-    # 打印结果（按规约 v1.1 格式）
-    print(f"\n[Evaluator] Results (规约 v1.1):")
+    # Print results (spec v1.1 format).
+    print("\n[Evaluator] Results (spec v1.1):")
     print(f"  compile_ok: {metrics.get('compile_ok', 0)}")
     if metrics.get('compile_ok', 0) == 0:
         print(f"  compile_error_type: {metrics.get('compile_error_type', 'unknown')}")
@@ -1624,7 +1616,7 @@ def main(program_path: str, results_dir: str):
 
 
 # =============================================================================
-# 命令行入口
+# CLI entrypoint
 # =============================================================================
 
 if __name__ == "__main__":

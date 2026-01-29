@@ -1,21 +1,22 @@
 """
-Lean4 Autoformalization 专用 Prompt 模块
+Lean 4 autoformalization prompt pack.
 
-这个模块覆盖 ShinkaEvolve 框架的默认 prompt，使其适合 Lean4 定理形式化任务。
+This module overrides the default ShinkaEvolve prompts so they fit Lean 4 theorem-statement
+formalization.
 
-【设计理念】
-原始 shinka/prompts 是为通用代码生成/优化设计的，使用：
+Design
+The original `shinka/prompts` are written for generic code generation/optimization, with roles like:
 - "expert software engineer"
 - "improve performance"
 - "algorithm optimization"
 
-这些对于 Lean4 autoformalization 是不适合的。我们需要：
-- Lean4 / Mathlib 专家角色
-- 数学形式化的专业知识
-- 关注 compile_ok 和 semantic_ok，而不是 "performance"
+Those are a poor fit for Lean 4 autoformalization. We need:
+- a Lean 4 / Mathlib expert role
+- domain knowledge for mathematical formalization
+- focus on `compile_ok` and `semantic_ok`, not "performance"
 
-【使用方式】
-在 run_evo.py 中导入前调用 patch_shinka_prompts() 函数。
+Usage
+Import and call `patch_all()` in `run_evo.py` *before* importing `shinka.core`.
 """
 
 from typing import List, Dict
@@ -113,7 +114,7 @@ def audit_prompt_usage(run_root: str) -> dict[str, int]:
 
 
 # =============================================================================
-# 基础系统消息（替换 BASE_SYSTEM_MSG）
+# Base system message (replaces BASE_SYSTEM_MSG)
 # =============================================================================
 
 BASE_SYSTEM_MSG = """You are an expert in Lean 4 theorem proving and the Mathlib library.
@@ -137,7 +138,7 @@ Quality goals:
 
 
 # =============================================================================
-# DIFF 模式（精确修改）
+# DIFF mode (precise edits)
 # =============================================================================
 
 DIFF_SYS_FORMAT = """
@@ -190,10 +191,10 @@ and end with `:= by sorry`.
 
 
 # =============================================================================
-# FULL 模式（完全重写）
+# FULL mode (rewrite)
 # =============================================================================
 
-# 默认重写
+# Default rewrite
 FULL_SYS_FORMAT_DEFAULT = """
 Rewrite the Lean 4 formalization file to improve its formalization quality.
 
@@ -209,7 +210,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-# 变体 1：不同的数学解释
+# Variant 1: alternative mathematical interpretation
 FULL_SYS_FORMAT_DIFFERENT = """
 Design a completely different formalization approach for the same mathematical claim.
 Consider alternative mathematical interpretations or structures.
@@ -225,7 +226,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-# 变体 2：类型和假设优化
+# Variant 2: improve types and hypotheses
 FULL_SYS_FORMAT_TYPES = """
 Focus on improving the type structure and hypothesis organization.
 
@@ -241,7 +242,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-# 变体 3：Mathlib 对齐
+# Variant 3: align with Mathlib conventions
 FULL_SYS_FORMAT_MATHLIB = """
 Align the formalization more closely with Mathlib conventions and existing definitions.
 
@@ -256,7 +257,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-# 变体 4：简化版本
+# Variant 4: simplified version
 FULL_SYS_FORMAT_SIMPLE = """
 Create a simpler, more minimal formalization that captures the essential mathematical content.
 
@@ -271,7 +272,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-# 所有 FULL 变体列表
+# All FULL variants
 FULL_SYS_FORMATS = [
     FULL_SYS_FORMAT_DEFAULT,
     FULL_SYS_FORMAT_DIFFERENT,
@@ -314,7 +315,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 
 
 # =============================================================================
-# CROSS 模式（组合多个形式化）
+# CROSS mode (combine multiple formalizations)
 # =============================================================================
 
 CROSS_SYS_FORMAT = """
@@ -364,11 +365,11 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 
 
 # =============================================================================
-# 辅助函数
+# Helper functions
 # =============================================================================
 
 def perf_str(combined_score: float, public_metrics: Dict[str, float]) -> str:
-    """格式化性能指标字符串。"""
+    """Format the performance metrics string."""
     result = f"Combined score: {combined_score:.2f}\n"
     for key, value in public_metrics.items():
         if isinstance(value, float):
@@ -379,7 +380,7 @@ def perf_str(combined_score: float, public_metrics: Dict[str, float]) -> str:
 
 
 def format_text_feedback_section(text_feedback) -> str:
-    """格式化文本反馈部分。"""
+    """Format the optional text-feedback section."""
     if not text_feedback or not str(text_feedback).strip():
         return ""
 
@@ -400,14 +401,14 @@ def construct_eval_history_msg(
     include_text_feedback: bool = False,
     max_attempts: int = 2,  # Kimina 8k context limit - reduced from 3 to 2
 ) -> str:
-    """构建历史评估程序的消息。
+    """Build a message summarizing previously evaluated programs.
 
-    限制最多 max_attempts 个尝试，避免超出模型上下文限制。
+    We cap the number of attempts to avoid blowing up the model context length.
     """
     if not inspiration_programs:
         return ""
 
-    # 限制历史尝试数量，取最后 max_attempts 个
+    # Limit history length: keep only the last `max_attempts`.
     programs_to_show = list(inspiration_programs)[-max_attempts:]
 
     result = "# Previous Formalization Attempts\n\n"
@@ -438,13 +439,13 @@ def get_cross_component(
     top_k_inspirations,
     language: str = "lean",
 ) -> str:
-    """获取交叉组件的灵感程序。"""
+    """Pick an inspiration program for the crossover prompt."""
     all_inspirations = list(archive_inspirations) + list(top_k_inspirations)
 
     if not all_inspirations:
         return ""
 
-    # 随机选择一个灵感
+    # Randomly pick one inspiration.
     inspiration = random.choice(all_inspirations)
 
     result = "# Crossover Inspiration\n\n"
@@ -544,14 +545,14 @@ def _truncate_meta(meta_text: str | None) -> str:
 
 
 # =============================================================================
-# 补丁函数：替换 shinka 的默认 prompt
+# Patch helpers: override Shinka's default prompts
 # =============================================================================
 
 def patch_shinka_prompts():
     """
-    用 Lean4 专用 prompt 替换 shinka 框架的默认 prompt。
+    Replace Shinka's default prompts with Lean 4-specific prompts.
 
-    调用时机：在 import shinka.core 之前调用。
+    Must be called before importing `shinka.core`.
     """
     import shinka.prompts as sp
     import shinka.prompts.prompts_base as sp_base
@@ -560,7 +561,7 @@ def patch_shinka_prompts():
     import shinka.prompts.prompts_cross as sp_cross
     import shinka.prompts.prompts_meta as sp_meta
 
-    # 替换 base
+    # Patch base.
     sp.BASE_SYSTEM_MSG = BASE_SYSTEM_MSG
     sp_base.BASE_SYSTEM_MSG = BASE_SYSTEM_MSG
     sp.perf_str = perf_str
@@ -591,19 +592,19 @@ def patch_shinka_prompts():
     sp.construct_individual_program_msg = construct_individual_program_msg_lean
     sp_base.construct_individual_program_msg = construct_individual_program_msg_lean
 
-    # 替换 diff
+    # Patch diff.
     sp.DIFF_SYS_FORMAT = DIFF_SYS_FORMAT
     sp.DIFF_ITER_MSG = DIFF_ITER_MSG
     sp_diff.DIFF_SYS_FORMAT = DIFF_SYS_FORMAT
     sp_diff.DIFF_ITER_MSG = DIFF_ITER_MSG
 
-    # 替换 full
+    # Patch full.
     sp.FULL_SYS_FORMATS = FULL_SYS_FORMATS
     sp.FULL_ITER_MSG = FULL_ITER_MSG
     sp_full.FULL_SYS_FORMATS = FULL_SYS_FORMATS
     sp_full.FULL_ITER_MSG = FULL_ITER_MSG
 
-    # 替换 cross
+    # Patch cross.
     sp.CROSS_SYS_FORMAT = CROSS_SYS_FORMAT
     sp.CROSS_ITER_MSG = CROSS_ITER_MSG
     sp.get_cross_component = get_cross_component
@@ -682,7 +683,7 @@ def patch_shinka_prompts():
 
 
 # =============================================================================
-# 初始化 prompt（替换 prompts_init.py）
+# Init prompts (replaces prompts_init.py)
 # =============================================================================
 
 INIT_SYSTEM_MSG = """You are a Lean4 expert with Mathlib knowledge.
@@ -697,7 +698,7 @@ INIT_USER_MSG = """Language: {language}
 
 
 def patch_init_prompts():
-    """替换初始化 prompt 和 sampler 方法。"""
+    """Replace init prompts and patch sampler methods."""
     import shinka.prompts.prompts_init as sp_init
     from shinka.core.sampler import PromptSampler
     import numpy as np
@@ -705,7 +706,7 @@ def patch_init_prompts():
     sp_init.INIT_SYSTEM_MSG = INIT_SYSTEM_MSG
     sp_init.INIT_USER_MSG = INIT_USER_MSG
 
-    # Patch PromptSampler.initial_program_prompt 避免 task_sys_msg 重复
+    # Patch PromptSampler.initial_program_prompt to avoid duplicating task_sys_msg.
     def patched_initial_program_prompt(self):
         """Generate the prompt for the initial program (patched for Lean4)."""
         if self.task_sys_msg is None:
@@ -716,14 +717,16 @@ def patch_init_prompts():
                 task_description=task_description,
             )
         else:
-            # task_sys_msg 已经是完整的任务描述，直接用作 system message
-            # user message 只需要简单的触发语
+            # task_sys_msg is already the full task description; use it as the system message.
+            # The user message only needs a small "trigger".
             sys_msg = self.task_sys_msg
             user_msg = f"Language: {self.language}\n\nPlease provide your formalization."
         return sys_msg, user_msg
 
-    # Patch PromptSampler.sample() - Evolution 阶段不使用 task_sys_msg 的 Example 部分
-    # 原始实现把 task_sys_msg + DIFF_SYS_FORMAT 等附加在一起，导致 prompt 过长且 LLM 重复 Example
+    # Patch PromptSampler.sample():
+    # - In evolution we avoid repeating the Example section embedded in task_sys_msg.
+    # - The original implementation concatenated task_sys_msg + DIFF_SYS_FORMAT etc., which
+    #   made prompts too long and caused LLMs to repeat the example.
     original_sample = PromptSampler.sample
 
     def patched_sample(self, parent, archive_inspirations, top_k_inspirations, meta_recommendations=None):
@@ -930,17 +933,17 @@ def patch_init_prompts():
 
 
 def patch_all():
-    """替换所有 prompt。"""
+    """Patch all Shinka prompts used by the autoformalization pipeline."""
     patch_shinka_prompts()
     patch_init_prompts()
 
 
 # =============================================================================
-# Kimina 专用 Evolution Prompt
+# Kimina-specific evolution prompt
 # =============================================================================
 #
-# Kimina-Autoformalizer 不理解 SEARCH/REPLACE 或 XML 标记格式。
-# 保留原有的启发式信息结构，但简化输出格式要求。
+# Kimina-Autoformalizer does not reliably follow SEARCH/REPLACE or XML-markup protocols.
+# We keep the heuristic information structure but simplify the output requirements.
 #
 
 KIMINA_EVOLUTION_SYS_MSG = """You are an expert in Lean 4 theorem proving and the Mathlib library.
@@ -1002,43 +1005,43 @@ def build_kimina_evolution_prompt(
     language: str = "lean",
 ) -> tuple:
     """
-    构建 Kimina 专用的 evolution prompt。
+    Build a Kimina-specific evolution prompt.
 
-    保留原有的启发式信息结构，但使用简化的输出格式。
+    Keeps the heuristic information structure, but uses a simplified output format.
 
     Args:
-        parent_code: 父程序代码
-        combined_score: 综合分数
-        public_metrics: 公开指标
-        text_feedback: 文本反馈
-        archive_inspirations: archive 灵感程序列表
-        top_k_inspirations: top-k 灵感程序列表
-        language: 编程语言
+        parent_code: parent program code
+        combined_score: combined score
+        public_metrics: public metrics
+        text_feedback: text feedback
+        archive_inspirations: inspiration programs from archive
+        top_k_inspirations: inspiration programs from top-k
+        language: code language
 
     Returns:
-        (system_message, user_message) 元组
+        (system_message, user_message) tuple
     """
     sys_msg = KIMINA_EVOLUTION_SYS_MSG
 
-    # 构建性能指标字符串
+    # Build performance metrics string.
     perf_metrics = perf_str(combined_score, public_metrics)
 
-    # 构建文本反馈部分
+    # Build text-feedback section.
     feedback_section = format_text_feedback_section(text_feedback)
 
-    # 构建灵感程序部分
+    # Build inspiration section.
     inspiration_section = ""
     all_inspirations = list(archive_inspirations or []) + list(top_k_inspirations or [])
     if all_inspirations:
         inspiration_section = "Here are some other successful formalizations for reference:\n\n"
-        for i, prog in enumerate(all_inspirations[:3]):  # 最多展示 3 个
+        for i, prog in enumerate(all_inspirations[:3]):  # show at most 3
             score = prog.combined_score if hasattr(prog, 'combined_score') else 0.0
             code = prog.code if hasattr(prog, 'code') else str(prog)
             inspiration_section += f"**Attempt {i+1}** (score={score:.2f}):\n```{language}\n{code}\n```\n\n"
     else:
         inspiration_section = "(No previous attempts available)"
 
-    # 格式化用户消息
+    # Format user message.
     user_msg = KIMINA_EVOLUTION_ITER_MSG.format(
         language=language,
         code_content=parent_code,
