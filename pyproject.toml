@@ -24,6 +24,7 @@ dependencies = [
     "pandas",
     "anthropic",
     "requests",
+    "httpx",
     "aiohttp",
     "boto3",
     "pydantic",
