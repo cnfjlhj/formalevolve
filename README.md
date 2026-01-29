@@ -280,6 +280,7 @@ For fine-grained knobs, use `run_evo.py` directly (single problem) and/or set en
 - **Patch styles**: `--patch_types`, `--patch_type_probs`
 - **Repairs**: `--max_repair_attempts`, `--max_repair_attempts_gen0` (or `--disable_repair`)
 - **EvolAST**: `AUTOFORMAL_ENABLE_EVOLAST_FALLBACK`, `AUTOFORMAL_EVOLAST_MODE`, `AUTOFORMAL_EVOLAST_P`, `AUTOFORMAL_EVOLAST_MAX_REWRITES`
+- **Selection temperature**: `AUTOFORMAL_PARENT_SELECTION_LAMBDA` (default 10.0)
 
 ## Supplementary zip (ICML-style code snapshot)
 

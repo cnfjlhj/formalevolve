@@ -491,7 +491,7 @@ def create_configs(
         parent_usage_penalty_alpha=float(
             os.environ.get("PARENT_USAGE_PENALTY_ALPHA", "0.05")
         ),
-        parent_selection_lambda=10.0,
+        parent_selection_lambda=_cfg_float_env("AUTOFORMAL_PARENT_SELECTION_LAMBDA", 10.0, min_value=0.0),
     )
 
     # =========================================================================
