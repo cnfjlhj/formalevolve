@@ -372,12 +372,12 @@ def main() -> int:
     parser.add_argument(
         "--enable_semantic_repair",
         action="store_true",
-        help="Enable bounded semantic repair when semantic judging is enabled (paper-aligned).",
+        help="Enable bounded semantic repair when semantic judging is enabled.",
     )
     parser.add_argument(
         "--paper_protocol",
         action="store_true",
-        help="Pin paper-aligned env defaults in child runs (K=2 islands, archive=40, migration 10/0.1, etc.).",
+        help="Set experiment defaults in child runs: K=2 islands, archive=40, migration 10/0.1.",
     )
     # Default ON (paper/system default). Provide an explicit disable flag for ablations.
     parser.add_argument(

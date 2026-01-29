@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ShinkaEvolve runner for Lean4 Autoformalization.
+FormalEvolve runner for Lean4 Autoformalization.
 
 ================================================================================
                                Design Overview
@@ -675,7 +675,7 @@ def create_configs(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run ShinkaEvolve for Lean4 autoformalization"
+        description="Run FormalEvolve for Lean4 autoformalization"
     )
     parser.add_argument(
         "--baseline_mode",
@@ -1060,7 +1060,7 @@ def main():
         args.use_beq = config_data.get("use_beq", args.use_beq)
 
     print("=" * 60)
-    print("ShinkaEvolve - Lean4 Autoformalization (spec v1.2)")
+    print("FormalEvolve - Lean4 Autoformalization (spec v1.2)")
     print("=" * 60)
     print(f"Informal: {args.informal[:100]}...")
     print(f"Baseline mode: {args.baseline_mode}")

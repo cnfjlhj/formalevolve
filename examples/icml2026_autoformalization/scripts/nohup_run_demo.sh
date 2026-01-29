@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Minimal nohup launcher for the paper-aligned pilot runner.
+# Minimal nohup launcher for the pilot runner.
 #
 # This script intentionally only exposes the configuration used by the main pipeline:
 # - Generator LLM (OpenAI-compatible): OPENAI_LLM_BASE_URL + AUTOFORMAL_LLM_MODELS
@@ -55,7 +55,7 @@ INIT_ROOT="${INIT_PROGRAMS_ROOT:-}"
 NUM_INIT="${NUM_INIT_CANDIDATES_GEN0:-16}"
 export AUTOFORMAL_REUSE_INIT_EVAL="${AUTOFORMAL_REUSE_INIT_EVAL:-1}"
 
-# Budget-facing debit for seedbank reuse (paper-aligned accounting).
+# Budget-facing debit for seedbank reuse.
 export AUTOFORMAL_SEEDBANK_DEBIT_CALLS="${AUTOFORMAL_SEEDBANK_DEBIT_CALLS:-1}"
 export AUTOFORMAL_SEEDBANK_CALLS_PER_SEED="${AUTOFORMAL_SEEDBANK_CALLS_PER_SEED:-1}"
 
