@@ -1,6 +1,6 @@
 # FormalEvolve
 
-FormalEvolve is a neuro-symbolic evolutionary search framework for generating **diverse** and **prover-effective** Lean 4 autoformalizations.
+FormalEvolve is a neuro-symbolic evolutionary search framework for generating **diverse** and **prover-effective** Lean4 autoformalizations.
 
 This repository is structured as:
 - `shinka/`: the underlying evolutionary search engine (vendored)
@@ -19,7 +19,7 @@ This code release is designed for **reproducibility level B**:
 The main workflow is:
 
 1. **Pick a benchmark slice** (bundled JSONL files under `examples/icml2026_autoformalization/benchmark/`).
-2. For each problem, run an **evolution loop** that proposes Lean 4 theorem statements.
+2. For each problem, run an **evolution loop** that proposes Lean4 theorem statements.
 3. Evaluate each candidate with:
    - local Lean compilation (`compile_ok`),
    - optional semantic 0/1 judging via **CriticLean** (`semantic_ok`) when enabled.
