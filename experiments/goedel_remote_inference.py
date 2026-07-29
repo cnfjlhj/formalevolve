@@ -554,6 +554,7 @@ async def _run_all(
     default_n: int,
     temperature: float,
     max_tokens: int,
+    max_tokens_safety_cap: int,
     timeout_s: float,
     output_mode: str,
     workers: int,
@@ -570,6 +571,25 @@ async def _run_all(
     t_start = time.time()
 
     records_by_origin: Dict[str, Dict[int, Dict[str, Any]]] = dict(existing_by_origin)
+    checkpoint_lock = asyncio.Lock()
+
+    async def _checkpoint_records(origin: str, recs: Dict[int, Dict[str, Any]], *, reason: str) -> None:
+        if int(save_every) <= 0:
+            return
+        async with checkpoint_lock:
+            records_by_origin[str(origin)] = dict(recs)
+            ordered: List[Dict[str, Any]] = []
+            for loaded_item in loaded:
+                by_g = records_by_origin.get(loaded_item.origin_problem_id) or {}
+                n_loaded = int(loaded_item.n) if int(loaded_item.n) > 0 else int(default_n)
+                for g in range(int(n_loaded)):
+                    r = by_g.get(int(g))
+                    if r:
+                        ordered.append(r)
+            txt = json.dumps(ordered, indent=2, ensure_ascii=False)
+            _atomic_write(output_dir / "to_inference_codes.json", txt)
+            _atomic_write(output_dir / "full_records.json", txt)
+            _warn(f"checkpoint: wrote {len(ordered)} records reason={reason} -> {output_dir}")
 
     limits = httpx.Limits(
         max_connections=max(8, int(workers) * 2),
@@ -612,10 +632,14 @@ async def _run_all(
                                                                                                        
                                                                                                      
                                                          
-                    effective_max_tokens = min(int(max_tokens), 8000)
+                    cap = int(max_tokens_safety_cap)
+                    effective_max_tokens = min(int(max_tokens), cap) if cap > 0 else int(max_tokens)
                     nonlocal clamp_warned
                     if not clamp_warned and int(effective_max_tokens) != int(max_tokens):
-                        _warn(f"clamp: requested max_tokens={max_tokens} -> {effective_max_tokens} (safety cap)")
+                        _warn(
+                            f"clamp: requested max_tokens={max_tokens} -> "
+                            f"{effective_max_tokens} (safety cap={cap})"
+                        )
                         clamp_warned = True
 
                     if request_n > 1:
@@ -700,6 +724,7 @@ async def _run_all(
                             "inference_handler": str(inference_handler),
                             "temperature": float(temperature),
                             "max_tokens": int(max_tokens),
+                            "max_tokens_safety_cap": int(max_tokens_safety_cap),
                             "max_tokens_effective": int(effective_max_tokens),
                             "latency_s": latency,
                             "error": err,
@@ -708,6 +733,11 @@ async def _run_all(
                             "infra_retry": int(infra_retry),
                             "input_item": it.input_item,
                         }
+                    await _checkpoint_records(
+                        it.origin_problem_id,
+                        merged,
+                        reason=f"chunk origin={it.origin_problem_id} offset={off} records={len(merged)}",
+                    )
                 return it.origin_problem_id, merged
 
         pending: List[Item] = []
@@ -727,23 +757,11 @@ async def _run_all(
         done = sum(1 for it in loaded if it.origin_problem_id in records_by_origin and len(records_by_origin[it.origin_problem_id]) >= max(1, int(it.n)))
         for fut in asyncio.as_completed(tasks):
             origin, recs = await fut
-            records_by_origin[origin] = recs
             done += 1
             _warn(f"progress: {done}/{total} items elapsed_s={time.time()-t_start:.1f}")
 
             if int(save_every) > 0 and (done % int(save_every) == 0 or done == total):
-                ordered: List[Dict[str, Any]] = []
-                for it in loaded:
-                    by_g = records_by_origin.get(it.origin_problem_id) or {}
-                    n_i = int(it.n) if int(it.n) > 0 else int(default_n)
-                    for g in range(int(n_i)):
-                        r = by_g.get(int(g))
-                        if r:
-                            ordered.append(r)
-                txt = json.dumps(ordered, indent=2, ensure_ascii=False)
-                _atomic_write(output_dir / "to_inference_codes.json", txt)
-                _atomic_write(output_dir / "full_records.json", txt)
-                _warn(f"checkpoint: wrote {len(ordered)} records -> {output_dir}")
+                await _checkpoint_records(origin, recs, reason=f"item_done done={done}/{total}")
 
 
 def main() -> int:
@@ -774,6 +792,12 @@ def main() -> int:
     ap.add_argument("--temperature", type=float, default=1.0)
                                                                                                             
     ap.add_argument("--max_tokens", type=int, default=8000)
+    ap.add_argument(
+        "--max_tokens_safety_cap",
+        type=int,
+        default=8000,
+        help="Clamp requested max_tokens to this value; set 0 to disable the safety cap.",
+    )
     ap.add_argument("--timeout_s", type=float, default=600.0)
     ap.add_argument("--api_key", default=os.environ.get("OPENAI_API_KEY", "").strip())
     ap.add_argument("--max_problems", type=int, default=0, help="If >0, only run the first N input items.")
@@ -882,6 +906,7 @@ def main() -> int:
             default_n=int(args.n),
             temperature=float(args.temperature),
             max_tokens=int(args.max_tokens),
+            max_tokens_safety_cap=int(args.max_tokens_safety_cap),
             timeout_s=float(args.timeout_s),
             output_mode=str(args.output_mode),
             workers=int(args.workers),

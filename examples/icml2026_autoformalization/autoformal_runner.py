@@ -2356,30 +2356,21 @@ class AutoformalizationRunner(EvolutionRunner):
                 assert seed_bank_dir is not None
                 src = seed_bank_dir / f"seed_{i}" / f"main.{self.lang_ext}"
                 if not src.exists():
-                    if i < min_num_init:
-                        raise FileNotFoundError(
-                            f"Seed bank is missing {src}. "
-                            "Make sure `--num_init_candidates_gen0` matches the number of available seeds, "
-                            "or provide a seed bank that contains `seed_i/main.lean` for every i."
-                        )
                     seed_bank_exhausted = True
-                                                                                                     
-                                                                                                   
-                                                                                                     
+
                     if _has_non_placeholder_seed(inserted_programs):
                         logger.warning(
-                            f"[Gen0] Seed bank exhausted at seed={i} (missing: {src}); stopping bootstrapping."
+                            f"[Gen0] Seed bank exhausted at seed={i} (missing: {src}); "
+                            "stopping bootstrapping with available reused seeds."
                         )
-                        if self.termination_reason is None:
-                            self.termination_reason = f"gen0_seedbank_exhausted_at_seed_{i}"
                         break
 
                     logger.warning(
                         f"[Gen0] Seed bank exhausted at seed={i} (missing: {src}) "
                         "AND no compile_ok=1 seed found; falling back to LLM sampling."
                     )
-                                                                         
                     continue
+
                 shutil.copy(src, exec_fname)
                 patch_name = f"seedbank_seed_{i}"
                 patch_description = f"Initial program copied from seed bank: {src}"
@@ -3872,11 +3863,13 @@ class AutoformalizationRunner(EvolutionRunner):
                 baseline = parent.combined_score if parent else None
                 reward = db_program.combined_score if db_program.correct else None
                 model_name = db_program.metadata["model_name"]
-                self.llm_selection.update(
-                    arm=model_name,
-                    reward=reward,
-                    baseline=baseline,
-                )
+                generation_arm_names = set(getattr(self.llm, "model_names", []) or [])
+                if model_name in generation_arm_names:
+                    self.llm_selection.update(
+                        arm=model_name,
+                        reward=reward,
+                        baseline=baseline,
+                    )
 
         self.db.save()
         self._update_best_solution()
