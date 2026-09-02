@@ -12,9 +12,9 @@ authors:
     given-names: Jing
 license: Apache-2.0
 repository-code: "https://github.com/cnfjlhj/formalevolve"
-url: "https://arxiv.org/abs/2603.19828"
+url: "https://github.com/cnfjlhj/formalevolve"
 preferred-citation:
-  type: article
+  type: conference-paper
   title: "FormalEvolve: Neuro-Symbolic Evolutionary Search for Diverse Autoformalization"
   authors:
     - family-names: Lu
@@ -24,4 +24,12 @@ preferred-citation:
     - family-names: Liu
       given-names: Jing
   year: 2026
+  collection-title: "Findings of the Association for Computational Linguistics: EMNLP 2026"
+  notes: "To appear."
+  conference:
+    name: "2026 Conference on Empirical Methods in Natural Language Processing"
+    date-start: "2026-10-24"
+    date-end: "2026-10-29"
+    location: "Budapest, Hungary"
+    website: "https://2026.emnlp.org/"
   url: "https://arxiv.org/abs/2603.19828"

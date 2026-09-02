@@ -1,14 +1,21 @@
 # FormalEvolve
 
-[![arXiv](https://img.shields.io/badge/arXiv-2603.19828-b31b1b.svg)](https://arxiv.org/abs/2603.19828)
+[![EMNLP 2026 Findings](https://img.shields.io/badge/EMNLP%202026-Findings-4C6EF5.svg)](https://2026.emnlp.org/)
+[![arXiv preprint](https://img.shields.io/badge/arXiv-2603.19828-b31b1b.svg)](https://arxiv.org/abs/2603.19828)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
+> **Accepted to Findings of the Association for Computational Linguistics: EMNLP 2026.**
+
+Official implementation of **“FormalEvolve: Neuro-Symbolic Evolutionary Search for Diverse Autoformalization”**.
+
+**Haijian Lu, Wei Wang, and Jing Liu**
+
+- **Venue:** Findings of EMNLP 2026
+- **Conference:** [EMNLP 2026](https://2026.emnlp.org/)
+- **Preprint:** [arXiv:2603.19828](https://arxiv.org/abs/2603.19828)
+- **Proceedings:** ACL Anthology entry forthcoming
+
 FormalEvolve is a neuro-symbolic evolutionary search framework for generating diverse and prover-effective Lean 4 autoformalizations. Instead of returning one formal statement per informal problem, it searches under a fixed generator-call budget and maintains a compilation-feasible archive of semantically accepted candidates for downstream proving.
-
-The paper **“FormalEvolve: Neuro-Symbolic Evolutionary Search for Diverse Autoformalization”** is accepted to **Findings of EMNLP 2026**.
-
-- Paper: https://arxiv.org/abs/2603.19828
-- Code: https://github.com/cnfjlhj/formalevolve
 
 ## Method overview
 
@@ -26,7 +33,7 @@ FormalEvolve combines:
 - `autoformalization/`: Lean compilation, candidate evaluation, and optional semantic judging.
 - `examples/formalevolve_autoformalization/`: paper-aligned entrypoints, prompts, benchmark adapters, and evaluation scripts.
 - `experiments/`: supporting evaluation and analysis utilities.
-- `submission/`: links to the current EMNLP 2026 paper and future ACL Anthology metadata.
+- `paper/`: accepted-paper status, preprint link, and future ACL Anthology metadata.
 - `tests/`: unit and regression tests.
 
 ## Installation
@@ -171,15 +178,18 @@ python -m pytest -q tests \
 
 ## Citation
 
+Until the official ACL Anthology BibTeX is available, use the following accepted-paper citation:
+
 ```bibtex
-@misc{lu2026formalevolve,
-  title         = {FormalEvolve: Neuro-Symbolic Evolutionary Search for Diverse Autoformalization},
-  author        = {Haijian Lu and Wei Wang and Jing Liu},
-  year          = {2026},
-  eprint        = {2603.19828},
-  archivePrefix = {arXiv},
-  primaryClass  = {cs.AI},
-  note          = {Accepted to Findings of EMNLP 2026}
+@inproceedings{lu-etal-2026-formalevolve,
+  title     = {FormalEvolve: Neuro-Symbolic Evolutionary Search for Diverse Autoformalization},
+  author    = {Lu, Haijian and Wang, Wei and Liu, Jing},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2026},
+  year      = {2026},
+  address   = {Budapest, Hungary},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://arxiv.org/abs/2603.19828},
+  note      = {To appear}
 }
 ```
 
