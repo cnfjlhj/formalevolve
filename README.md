@@ -151,8 +151,14 @@ python examples/icml2026_autoformalization/scripts/paper_summary_run.py \
 
 ## Tests
 
+Install the test runner into the active environment:
+
 ```bash
-pytest -q tests \
+python -m pip install pytest
+```
+
+```bash
+python -m pytest -q tests \
   examples/icml2026_autoformalization/autoformalization-cycle-consistency/examples/test_cycle_consistency_scoring.py
 ```
 
