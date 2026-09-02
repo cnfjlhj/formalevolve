@@ -2,7 +2,7 @@
 """
 Paper-aligned summary metrics from per-problem runs.
 
-This script is intended for ICML-style "code supplementary" releases:
+This script summarizes paper-aligned reproducibility runs:
 - It consumes the outputs produced by `run_dataset_pilot.py`
   (i.e., a directory containing `runs/<problem_id>/evolution_db.sqlite`).
 - It computes the core paper metrics at the *run budget* T (the run's stop point):
@@ -102,7 +102,7 @@ def _topk_share(values: Sequence[int], frac: float = 0.10) -> float:
 def _import_statement_utils() -> Tuple[Any, Any]:
     """Import statement normalization helpers from the evaluator."""
     here = Path(__file__).resolve()
-    # examples/icml2026_autoformalization/scripts -> examples/icml2026_autoformalization
+    # examples/formalevolve_autoformalization/scripts -> examples/formalevolve_autoformalization
     root = here.parents[1]
     sys.path.insert(0, str(root))
     from evaluate import normalize_lean_statement, normalize_decl_name_for_cycle_prompt  # type: ignore

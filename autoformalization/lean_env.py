@@ -18,7 +18,7 @@ _lean_server = None
 # Configuration
 #
 # Paper alignment:
-# - The ICML 2026 experiments use Lean 4.15.0 + Mathlib v4.15.0 (pinned via Kimina Lean Server).
+# - The EMNLP 2026 experiments use Lean 4.15.0 + Mathlib v4.15.0 (pinned via Kimina Lean Server).
 # - For the open-source reproducibility pipeline, local compilation uses `lean-interact` and
 #   downloads a matching Mathlib toolchain on first run.
 #

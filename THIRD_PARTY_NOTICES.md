@@ -15,7 +15,7 @@ FormalEvolve modifies and extends this component for Lean autoformalization, sym
 ## ProofNet
 
 - Upstream: https://github.com/zhangir-azerbayev/proofnet
-- Upstream component: benchmark items adapted into the ProofNet JSONL snapshots under `examples/icml2026_autoformalization/benchmarks/`
+- Upstream component: benchmark items adapted into the ProofNet JSONL snapshots under `examples/formalevolve_autoformalization/benchmark/`
 - Copyright: Copyright (c) 2022 zhangir-azerbayev
 - License: MIT License
 - Local license copy: [`third_party/licenses/ProofNet-LICENSE`](third_party/licenses/ProofNet-LICENSE)
@@ -25,7 +25,7 @@ The bundled files may contain local preprocessing and Lean-version adaptations. 
 ## CombiBench
 
 - Upstream: https://github.com/MoonshotAI/CombiBench
-- Upstream component: benchmark items adapted into the CombiBench JSONL snapshots under `examples/icml2026_autoformalization/benchmarks/`
+- Upstream component: benchmark items adapted into the CombiBench JSONL snapshots under `examples/formalevolve_autoformalization/benchmark/`
 - Copyright: Copyright (c) 2025 Moonshot AI and Project Numina
 - License: MIT License
 - Local license copy: [`third_party/licenses/CombiBench-LICENSE`](third_party/licenses/CombiBench-LICENSE)

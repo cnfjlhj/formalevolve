@@ -72,7 +72,7 @@ results_*/
 **/output/
 **/outputs/
 examples/autoformalization_v1/results_*/
-examples/icml2026_autoformalization/results_*/
+examples/formalevolve_autoformalization/results_*/
 
 *.sqlite
 *.sqlite3

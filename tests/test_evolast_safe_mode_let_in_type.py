@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-AUTOFORMAL_DIR = ROOT / "examples" / "icml2026_autoformalization"
+AUTOFORMAL_DIR = ROOT / "examples" / "formalevolve_autoformalization"
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(AUTOFORMAL_DIR))
 

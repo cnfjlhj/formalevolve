@@ -24,9 +24,9 @@ FormalEvolve combines:
 
 - `shinka/`: adapted evolutionary-search engine based on [SakanaAI/ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve).
 - `autoformalization/`: Lean compilation, candidate evaluation, and optional semantic judging.
-- `examples/icml2026_autoformalization/`: paper-aligned entrypoints, prompts, benchmark adapters, and evaluation scripts. The directory name is retained as a historical compatibility namespace.
+- `examples/formalevolve_autoformalization/`: paper-aligned entrypoints, prompts, benchmark adapters, and evaluation scripts.
 - `experiments/`: supporting evaluation and analysis utilities.
-- `submission/`: links to the current paper rather than the retired anonymous ICML supplementary bundle.
+- `submission/`: links to the current EMNLP 2026 paper and future ACL Anthology metadata.
 - `tests/`: unit and regression tests.
 
 ## Installation
@@ -49,7 +49,7 @@ The paper-aligned default Lean version is `v4.15.0`. Override it with `LEAN_INTE
 This exercises the evolutionary pipeline with a mock generator and does not require an external model endpoint:
 
 ```bash
-python examples/icml2026_autoformalization/run_evo.py \
+python examples/formalevolve_autoformalization/run_evo.py \
   --llm_mode mock \
   --num_generations 1 \
   --max_llm_calls 5 \
@@ -59,7 +59,7 @@ python examples/icml2026_autoformalization/run_evo.py \
 ## Paper-aligned pilot
 
 ```bash
-python examples/icml2026_autoformalization/scripts/run_dataset_pilot.py \
+python examples/formalevolve_autoformalization/scripts/run_dataset_pilot.py \
   --dataset proofnet_test \
   --num_problems 5 \
   --baseline_mode ours \
@@ -85,7 +85,7 @@ The pilot writes:
 Enable CriticLean-compatible semantic judging and bounded semantic repair with:
 
 ```bash
-python examples/icml2026_autoformalization/scripts/run_dataset_pilot.py \
+python examples/formalevolve_autoformalization/scripts/run_dataset_pilot.py \
   --dataset proofnet_test \
   --num_problems 5 \
   --baseline_mode ours \
@@ -104,7 +104,7 @@ python examples/icml2026_autoformalization/scripts/run_dataset_pilot.py \
 A dedicated patch model can be configured independently:
 
 ```bash
-python examples/icml2026_autoformalization/scripts/run_dataset_pilot.py \
+python examples/formalevolve_autoformalization/scripts/run_dataset_pilot.py \
   --dataset proofnet_test \
   --num_problems 5 \
   --baseline_mode ours \
@@ -122,7 +122,7 @@ python examples/icml2026_autoformalization/scripts/run_dataset_pilot.py \
 Build a seedbank:
 
 ```bash
-python examples/icml2026_autoformalization/scripts/build_seedbank.py \
+python examples/formalevolve_autoformalization/scripts/build_seedbank.py \
   --dataset proofnet_test \
   --num_problems 5 \
   --seeds_per_problem 16 \
@@ -138,14 +138,14 @@ Reuse it with `--init_programs_root <INIT_PROGRAMS_ROOT>` when launching `run_da
 Compute strict per-problem metrics:
 
 ```bash
-python examples/icml2026_autoformalization/scripts/strict_eval_run.py \
+python examples/formalevolve_autoformalization/scripts/strict_eval_run.py \
   --run_root <RUN_ROOT>
 ```
 
 Compute aggregate paper metrics:
 
 ```bash
-python examples/icml2026_autoformalization/scripts/paper_summary_run.py \
+python examples/formalevolve_autoformalization/scripts/paper_summary_run.py \
   --run_root <RUN_ROOT>
 ```
 
@@ -159,7 +159,7 @@ python -m pip install pytest
 
 ```bash
 python -m pytest -q tests \
-  examples/icml2026_autoformalization/autoformalization-cycle-consistency/examples/test_cycle_consistency_scoring.py
+  examples/formalevolve_autoformalization/autoformalization-cycle-consistency/examples/test_cycle_consistency_scoring.py
 ```
 
 ## Reproducibility notes

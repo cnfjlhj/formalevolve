@@ -12,7 +12,7 @@ set -euo pipefail
 #   OPENAI_LLM_BASE_URL="http://<host>:<port>/v1" \
 #   AUTOFORMAL_LLM_MODELS="Qwen3-30B-A3B" \
 #   CRITIC_LEAN_BASE_URL="http://<host>:<port>" \
-#   bash examples/icml2026_autoformalization/scripts/nohup_run_demo.sh proofnet_test 20 100
+#   bash examples/formalevolve_autoformalization/scripts/nohup_run_demo.sh proofnet_test 20 100
 #
 # Optional seedbank (Kimina) for Gen0 bootstrapping:
 #   INIT_PROGRAMS_ROOT="/path/to/seedbanks_root" \
