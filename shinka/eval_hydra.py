@@ -1,4 +1,4 @@
-                      
+#!/usr/bin/env python3
 import os
 import sys
 import argparse
@@ -63,6 +63,6 @@ if __name__ == "__main__":
     print("Launching evaluation of function:")
     print(omegaconf.OmegaConf.to_yaml(cfg.evaluate_function))
 
-                                             
+    # import & run under the target directory
     with chdir_to_target(cfg.evaluate_function):
         hydra.utils.instantiate(cfg.evaluate_function)

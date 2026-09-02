@@ -75,7 +75,7 @@ class BanditBase(ABC):
         self._baseline = float(baseline)
 
     def _resolve_arm(self, arm: Arm) -> int:
-                                                     
+        # allows updating by int index or string name
         if isinstance(arm, int):
             return int(arm)
         if self._arm_names is None:
@@ -134,7 +134,7 @@ class BanditBase(ABC):
 
 
 class AsymmetricUCB(BanditBase):
-                                                             
+    # asymmetric ucb1 with ε-exploration and adaptive scaling
     def __init__(
         self,
         n_arms: Optional[int] = None,
@@ -172,7 +172,7 @@ class AsymmetricUCB(BanditBase):
 
         self.use_exponential_scaling = self.exponential_base is not None
 
-                                         
+        # if none, no exponential scaling
         if self.exponential_base is not None:
             assert self.exponential_base > 0.0, "exponential_base must be > 0"
             self.exponential_base = float(exponential_base)
@@ -399,7 +399,7 @@ class AsymmetricUCB(BanditBase):
         t0 = float(self.n.sum())
         step = int(v.sum()) + 1
 
-                                                                
+        # simulate remaining k virtual pulls with epsilon-greedy
         while k > 0:
             num = 2.0 * np.log(max(t0 + step, 2.0))
             den = np.maximum(n_sub + v, 1.0)
@@ -432,7 +432,7 @@ class AsymmetricUCB(BanditBase):
         self.divs = self.divs * factor
         one_minus_factor = 1.0 - factor
         if self.use_exponential_scaling and self.asymmetric_scaling:
-                                                               
+            # shrink in exp space to match original score scale
             s = self.s
             with np.errstate(divide='ignore', invalid='ignore'):
                 log1p_term = np.where(
@@ -472,14 +472,14 @@ class AsymmetricUCB(BanditBase):
         n = self.n.astype(int)
         mean = self._mean()
         if self.use_exponential_scaling:
-            mean_disp = mean                     
+            mean_disp = mean  # keep in log space
             mean_label = "log mean"
         else:
             mean_disp = mean
             mean_label = "mean"
         idx = np.arange(self._n_arms)
 
-                                                 
+        # exploitation and exploration components
         exploitation = self._normalized_means(idx)
         t = float(self.n.sum())
         num = 2.0 * np.log(max(t, 2.0))
@@ -487,7 +487,7 @@ class AsymmetricUCB(BanditBase):
         exploration = self.c * np.sqrt(num / n_sub)
         score = exploitation + exploration
 
-                                   
+        # Create header information
         exp_base_str = (
             f"{self.exponential_base:.3f}"
             if self.exponential_base is not None
@@ -518,16 +518,16 @@ class AsymmetricUCB(BanditBase):
                 f"obs_range=[{obs_min:.6f},{obs_max:.6f}] (w={rng:.6f})"
             )
 
-                           
+        # Create rich table
         table = Table(
             title=header_info,
             box=rich.box.ROUNDED,
             show_header=True,
             header_style="bold cyan",
-            width=120,                                
+            width=120,  # Match display.py table width
         )
 
-                     
+        # Add columns
         table.add_column("arm", style="white", width=24)
         table.add_column("n", justify="right", style="green")
         table.add_column("div", justify="right", style="yellow")
@@ -537,9 +537,9 @@ class AsymmetricUCB(BanditBase):
         table.add_column("score", justify="right", style="bold white")
         table.add_column("post", justify="right", style="bright_green")
 
-                  
+        # Add rows
         for i, name in enumerate(names):
-                                                                      
+            # Split name by "/" and take last part, then last 25 chars
             if isinstance(name, str):
                 display_name = name.split("/")[-1][-25:]
             else:
@@ -555,13 +555,13 @@ class AsymmetricUCB(BanditBase):
                 f"{post[i]:.4f}",
             )
 
-                                   
+        # Print directly to console
         console = Console()
         console.print(table)
 
 
 class FixedSampler(BanditBase):
-                                                                  
+    # samples from fixed prior probabilities; no learning or decay
     def __init__(
         self,
         n_arms: Optional[int] = None,
@@ -615,7 +615,7 @@ class FixedSampler(BanditBase):
         subset: Subset = None,
         samples: Optional[int] = None,
     ) -> np.ndarray:
-                                                      
+        # return fixed selection probabilities per arm
         if subset is None:
             return self.p.copy()
         idx = self._resolve_subset(subset)
@@ -635,23 +635,23 @@ class FixedSampler(BanditBase):
         names = self._arm_names or [str(i) for i in range(self._n_arms)]
         post = self.posterior()
 
-                           
+        # Create rich table
         table = Table(
             title="FixedSampler (fixed prior probs)",
             box=rich.box.ROUNDED,
             show_header=True,
             header_style="bold cyan",
-            width=120,                                
+            width=120,  # Match display.py table width
         )
 
-                     
+        # Add columns
         table.add_column("arm", style="white", width=28)
         table.add_column("base", justify="right", style="blue")
         table.add_column("prob", justify="right", style="bright_green")
 
-                  
+        # Add rows
         for i, name in enumerate(names):
-                                                                      
+            # Split name by "/" and take last part, then last 28 chars
             if isinstance(name, str):
                 display_name = name.split("/")[-1][-28:]
             else:
@@ -662,6 +662,6 @@ class FixedSampler(BanditBase):
                 f"{post[i]:.4f}",
             )
 
-                                   
+        # Print directly to console
         console = Console()
         console.print(table)

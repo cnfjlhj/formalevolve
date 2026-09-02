@@ -24,35 +24,35 @@ import os
 import re
 import random
 
-                                                                               
-                                         
-                                                                               
- 
-                                                                                       
-                                                                                
-                                                                                  
- 
-                                                                
-                                                   
-                                                                                
- 
-                                                                                     
-                           
-                                                                           
-                                                                      
- 
-                              
-                                                                                
-                                                                                        
-                                                                                         
-                                                                                              
- 
-                                                                                             
-                                                                                       
- 
-                      
-                                                                                                                                          
- 
+# =============================================================================
+# Prompt Audit Notes (operational memory)
+# =============================================================================
+#
+# This module is imported by `run_evo.py` and patches Shinka prompts via `patch_all()`.
+# If you're trying to answer “which prompts are REALLY used in a run?”, the most
+# reliable source is the per-problem `meta_memory.json` logs under the run output.
+#
+# Example run (CombiBench 100×100, staged full/diff then cross):
+# - experiments/combibench100_call100/evolution100/
+#   run_YYYYMMDD_HHMMSS__suiteX__combibench__n100__calls100__seed0__conc20__main
+#
+# What was used there (by scanning `runs/ours/*/meta_memory.json` system_msg fields):
+# - Base: `BASE_SYSTEM_MSG`
+# - Evolution: `DIFF_SYS_FORMAT`, `FULL_SYS_FORMATS[*]`, `CROSS_SYS_FORMAT`
+# - User templates: `DIFF_ITER_MSG`, `FULL_ITER_MSG`, `CROSS_ITER_MSG`
+#
+# What was NOT observed there:
+# - Kimina evolution prompts (KIMINA_*): not referenced by the main runner path.
+# - Repair prompts: live in `autoformal_runner.py` and only trigger when repairs happen;
+#   for many problems in that run, repairs were enabled but unused (compile_ok stayed 1).
+# - Global meta recommendations: supported by this file, but may be empty depending on config.
+#
+# IMPORTANT: avoid hard-coding domain-specific “Mathlib patterns” (e.g., holomorphic/Complex)
+# in `BASE_SYSTEM_MSG`, since CombiBench spans many domains and such hints can mislead.
+#
+# Quick audit command:
+#   python3 -c "from prompts_lean4 import audit_prompt_usage; import json; print(json.dumps(audit_prompt_usage('PATH_TO_RUN'), indent=2))"
+#
 
 def audit_prompt_usage(run_root: str) -> dict[str, int]:
     """
@@ -113,9 +113,9 @@ def audit_prompt_usage(run_root: str) -> dict[str, int]:
     return counts
 
 
-                                                                               
-                                                
-                                                                               
+# =============================================================================
+# Base system message (replaces BASE_SYSTEM_MSG)
+# =============================================================================
 
 BASE_SYSTEM_MSG = """You are an expert in Lean 4 theorem proving and the Mathlib library.
 
@@ -137,9 +137,9 @@ Quality goals:
 """
 
 
-                                                                               
-                           
-                                                                               
+# =============================================================================
+# DIFF mode (precise edits)
+# =============================================================================
 
 DIFF_SYS_FORMAT = """
 You are doing a LOCAL EDIT of a Lean 4 formalization file.
@@ -190,11 +190,11 @@ and end with `:= by sorry`.
 """
 
 
-                                                                               
-                     
-                                                                               
+# =============================================================================
+# FULL mode (rewrite)
+# =============================================================================
 
-                 
+# Default rewrite
 FULL_SYS_FORMAT_DEFAULT = """
 Rewrite the Lean 4 formalization file to improve its formalization quality.
 
@@ -210,7 +210,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-                                                    
+# Variant 1: alternative mathematical interpretation
 FULL_SYS_FORMAT_DIFFERENT = """
 Design a completely different formalization approach for the same mathematical claim.
 Consider alternative mathematical interpretations or structures.
@@ -226,7 +226,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-                                         
+# Variant 2: improve types and hypotheses
 FULL_SYS_FORMAT_TYPES = """
 Focus on improving the type structure and hypothesis organization.
 
@@ -242,7 +242,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-                                           
+# Variant 3: align with Mathlib conventions
 FULL_SYS_FORMAT_MATHLIB = """
 Align the formalization more closely with Mathlib conventions and existing definitions.
 
@@ -257,7 +257,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-                               
+# Variant 4: simplified version
 FULL_SYS_FORMAT_SIMPLE = """
 Create a simpler, more minimal formalization that captures the essential mathematical content.
 
@@ -272,7 +272,7 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-                   
+# All FULL variants
 FULL_SYS_FORMATS = [
     FULL_SYS_FORMAT_DEFAULT,
     FULL_SYS_FORMAT_DIFFERENT,
@@ -314,9 +314,9 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-                                                                               
-                                              
-                                                                               
+# =============================================================================
+# CROSS mode (combine multiple formalizations)
+# =============================================================================
 
 CROSS_SYS_FORMAT = """
 You are given multiple Lean 4 formalization files that formalize the same mathematical claim.
@@ -364,9 +364,9 @@ use a unique name starting with `my_`, and end with `:= by sorry`.
 """
 
 
-                                                                               
-                  
-                                                                               
+# =============================================================================
+# Helper functions
+# =============================================================================
 
 def perf_str(combined_score: float, public_metrics: Dict[str, float]) -> str:
     """Format the performance metrics string."""
@@ -399,7 +399,7 @@ def construct_eval_history_msg(
     inspiration_programs,
     language: str = "lean",
     include_text_feedback: bool = False,
-    max_attempts: int = 2,                                                 
+    max_attempts: int = 2,  # Kimina 8k context limit - reduced from 3 to 2
 ) -> str:
     """Build a message summarizing previously evaluated programs.
 
@@ -408,7 +408,7 @@ def construct_eval_history_msg(
     if not inspiration_programs:
         return ""
 
-                                                              
+    # Limit history length: keep only the last `max_attempts`.
     programs_to_show = list(inspiration_programs)[-max_attempts:]
 
     result = "# Previous Formalization Attempts\n\n"
@@ -445,7 +445,7 @@ def get_cross_component(
     if not all_inspirations:
         return ""
 
-                                    
+    # Randomly pick one inspiration.
     inspiration = random.choice(all_inspirations)
 
     result = "# Crossover Inspiration\n\n"
@@ -461,9 +461,9 @@ def get_cross_component(
     return result
 
 
-                                                                               
-                                           
-                                                                               
+# =============================================================================
+# Evolution helpers (Lean-only, local-full)
+# =============================================================================
 
 
 def _extract_informal_and_header(task_sys_msg: str | None) -> tuple[str, str]:
@@ -482,13 +482,13 @@ def _extract_informal_and_header(task_sys_msg: str | None) -> tuple[str, str]:
     if not task_sys_msg:
         return "", ""
 
-                                                                               
-                                                                         
-                                                                               
+    # -------------------------------------------------------------------------
+    # Format A: run_evo.build_task_sys_msg() (Lean4 autoformalization_v1)
+    # -------------------------------------------------------------------------
     informal = ""
     header = ""
 
-                             
+    # Header block (optional)
     m_header = re.search(
         r"Reference header from the dataset.*?\n```lean(?:4)?\s*\n(?P<header>.*?)\n```",
         task_sys_msg,
@@ -497,7 +497,7 @@ def _extract_informal_and_header(task_sys_msg: str | None) -> tuple[str, str]:
     if m_header:
         header = (m_header.group("header") or "").strip()
 
-                        
+    # Informal statement
     m_informal = re.search(
         r"Natural language(?: statement)?\s*:\s*\n(?P<informal>.*?)(?:\n\s*\nReturn ONLY the Lean code block\.?|\Z)",
         task_sys_msg,
@@ -506,14 +506,14 @@ def _extract_informal_and_header(task_sys_msg: str | None) -> tuple[str, str]:
     if m_informal:
         informal = (m_informal.group("informal") or "").strip()
 
-                                                                                       
+    # Header-only is not sufficient; if informal is missing we must try legacy formats.
     if informal:
         return informal, header
 
-                                                                               
-                                                                                
-                                                                               
-                                                                                          
+    # -------------------------------------------------------------------------
+    # Format B: legacy prompt template ("**Natural language:**" / "**Header:**")
+    # -------------------------------------------------------------------------
+    # Prefer content after "### Your Task" if present, to avoid matching an example block.
     task_section = task_sys_msg
     your_task_match = re.search(r"### Your Task\s*\n", task_sys_msg)
     if your_task_match:
@@ -544,9 +544,9 @@ def _truncate_meta(meta_text: str | None) -> str:
     return meta_text
 
 
-                                                                               
-                                                  
-                                                                               
+# =============================================================================
+# Patch helpers: override Shinka's default prompts
+# =============================================================================
 
 def patch_shinka_prompts():
     """
@@ -561,7 +561,7 @@ def patch_shinka_prompts():
     import shinka.prompts.prompts_cross as sp_cross
     import shinka.prompts.prompts_meta as sp_meta
 
-                 
+    # Patch base.
     sp.BASE_SYSTEM_MSG = BASE_SYSTEM_MSG
     sp_base.BASE_SYSTEM_MSG = BASE_SYSTEM_MSG
     sp.perf_str = perf_str
@@ -592,19 +592,19 @@ def patch_shinka_prompts():
     sp.construct_individual_program_msg = construct_individual_program_msg_lean
     sp_base.construct_individual_program_msg = construct_individual_program_msg_lean
 
-                 
+    # Patch diff.
     sp.DIFF_SYS_FORMAT = DIFF_SYS_FORMAT
     sp.DIFF_ITER_MSG = DIFF_ITER_MSG
     sp_diff.DIFF_SYS_FORMAT = DIFF_SYS_FORMAT
     sp_diff.DIFF_ITER_MSG = DIFF_ITER_MSG
 
-                 
+    # Patch full.
     sp.FULL_SYS_FORMATS = FULL_SYS_FORMATS
     sp.FULL_ITER_MSG = FULL_ITER_MSG
     sp_full.FULL_SYS_FORMATS = FULL_SYS_FORMATS
     sp_full.FULL_ITER_MSG = FULL_ITER_MSG
 
-                  
+    # Patch cross.
     sp.CROSS_SYS_FORMAT = CROSS_SYS_FORMAT
     sp.CROSS_ITER_MSG = CROSS_ITER_MSG
     sp.get_cross_component = get_cross_component
@@ -612,7 +612,7 @@ def patch_shinka_prompts():
     sp_cross.CROSS_ITER_MSG = CROSS_ITER_MSG
     sp_cross.get_cross_component = get_cross_component
 
-                                                          
+    # --- Meta prompts (global, short; Lean4-oriented) ---
     META_STEP1_SYSTEM_MSG = (
         "You are an expert in Lean 4 theorem proving and Mathlib. "
         "Summarize ONE candidate theorem statement and its evaluation metrics. "
@@ -682,9 +682,9 @@ def patch_shinka_prompts():
     print("[Lean4 Prompts] Successfully patched shinka prompts for Lean4 autoformalization")
 
 
-                                                                               
-                                         
-                                                                               
+# =============================================================================
+# Init prompts (replaces prompts_init.py)
+# =============================================================================
 
 INIT_SYSTEM_MSG = """You are a Lean4 expert with Mathlib knowledge.
 Follow Mathlib naming conventions and type class patterns.
@@ -706,7 +706,7 @@ def patch_init_prompts():
     sp_init.INIT_SYSTEM_MSG = INIT_SYSTEM_MSG
     sp_init.INIT_USER_MSG = INIT_USER_MSG
 
-                                                                                   
+    # Patch PromptSampler.initial_program_prompt to avoid duplicating task_sys_msg.
     def patched_initial_program_prompt(self):
         """Generate the prompt for the initial program (patched for Lean4)."""
         if self.task_sys_msg is None:
@@ -717,16 +717,16 @@ def patch_init_prompts():
                 task_description=task_description,
             )
         else:
-                                                                                              
-                                                            
+            # task_sys_msg is already the full task description; use it as the system message.
+            # The user message only needs a small "trigger".
             sys_msg = self.task_sys_msg
             user_msg = f"Language: {self.language}\n\nPlease provide your formalization."
         return sys_msg, user_msg
 
-                                   
-                                                                                     
-                                                                                           
-                                                                    
+    # Patch PromptSampler.sample():
+    # - In evolution we avoid repeating the Example section embedded in task_sys_msg.
+    # - The original implementation concatenated task_sys_msg + DIFF_SYS_FORMAT etc., which
+    #   made prompts too long and caused LLMs to repeat the example.
     original_sample = PromptSampler.sample
 
     def patched_sample(self, parent, archive_inspirations, top_k_inspirations, meta_recommendations=None):
@@ -737,13 +737,13 @@ def patch_init_prompts():
 
         logger = logging.getLogger(__name__)
 
-                                                                           
+        # Base system message (avoid repeating the example in task_sys_msg)
         sys_msg = BASE_SYSTEM_MSG
 
-                                                                              
-         
-                                                                                         
-                                                                            
+        # Extract verbatim task context (informal + header) from task_sys_msg.
+        #
+        # IMPORTANT: The user message MUST always include the current informal statement,
+        # otherwise the model can be led astray by inspirations/parent code.
         raw_task_sys_msg = getattr(self, "task_sys_msg", None)
         informal_txt, _header_txt = _extract_informal_and_header(raw_task_sys_msg)
         task_context_msg = ""
@@ -753,9 +753,9 @@ def patch_init_prompts():
                 task_context_msg += "## Natural language statement\n\n"
                 task_context_msg += informal_txt.strip() + "\n\n"
         elif raw_task_sys_msg:
-                                                                                     
-                                                                                  
-                                 
+            # Fallback: ensure the informal claim is still present even if extraction
+            # fails due to format drift (or a too-long header pushing the informal
+            # beyond truncation).
             raw = str(raw_task_sys_msg).strip()
             max_chars = int(os.environ.get("AUTOFORMAL_TASK_CONTEXT_FALLBACK_MAX_CHARS", "3500"))
             fallback_informal = ""
@@ -774,17 +774,17 @@ def patch_init_prompts():
                 task_context_msg += "## Natural language statement\n\n"
                 task_context_msg += fallback_informal + "\n\n"
             if not fallback_informal:
-                                                                            
+                # Last resort: include a tail slice of the raw task message.
                 tail = raw[m.start() :] if m else raw
                 if max_chars > 0 and len(tail) > max_chars:
                     tail = "... [truncated head]\n" + tail[-max_chars:].lstrip()
                 task_context_msg += "## Raw task context (tail)\n\n" + tail + "\n\n"
 
-                            
-         
-                                                                                    
-                                                                                   
-                                                                         
+        # Sample patch type.
+        #
+        # Default: disable `cross` if no inspirations (archive/top-k) are available.
+        # Demo override: allow forcing `cross` even with empty inspirations so that
+        # cross-problem few-shot injection can be inspected in isolation.
         allow_cross_no_insp = str(os.environ.get("AUTOFORMAL_ALLOW_CROSS_NO_INSP", "")).strip().lower() in {
             "1",
             "true",
@@ -805,10 +805,10 @@ def patch_init_prompts():
         else:
             patch_type = np.random.choice(self.patch_types, p=self.patch_type_probs)
 
-                                                             
+        # Clear last cross selection for logging consistency.
         setattr(self, "_last_cross_inspiration_ids", [])
 
-                                                
+        # Patch-type specific system constraints
         if patch_type == "diff":
             sys_msg += DIFF_SYS_FORMAT
         elif patch_type == "full":
@@ -817,12 +817,12 @@ def patch_init_prompts():
         elif patch_type == "cross":
             sys_msg += CROSS_SYS_FORMAT
 
-                                          
+        # Text feedback section (optional)
         text_feedback_section = ""
         if self.use_text_feedback:
             text_feedback_section = "\n" + format_text_feedback_section(parent.text_feedback)
 
-                                         
+        # Build the core iteration prompt
         if patch_type == "diff":
             iter_msg = DIFF_ITER_MSG.format(
                 language=self.language,
@@ -844,9 +844,9 @@ def patch_init_prompts():
                 performance_metrics=perf_str(parent.combined_score, parent.public_metrics),
                 text_feedback_section=text_feedback_section,
             )
-                                                                                         
-             
-                                                                                             
+            # Optional: cross-problem few-shot memory (injected by launcher per problem).
+            #
+            # This is intentionally scoped to `cross` to avoid contaminating diff/full steps.
             few_shot_path = os.environ.get("AUTOFORMAL_CROSS_PROBLEM_FEW_SHOTS_PATH", "").strip()
             if few_shot_path:
                 try:
@@ -870,7 +870,7 @@ def patch_init_prompts():
                             code_ex = str(ex.get("code", "") or "").strip()
                             if not informal_ex or not code_ex:
                                 continue
-                                                                                
+                            # Keep prompts compact (Kimina context constraints).
                             if len(code_ex) > 2500:
                                 code_ex = code_ex[:2500].rstrip() + "\n-- [truncated]"
                             fs_msg += f"## Example {i+1}\n\n"
@@ -881,7 +881,7 @@ def patch_init_prompts():
                 except Exception as e:
                     logger.info(f"[CrossProblem] Failed to load few-shots from {few_shot_path}: {type(e).__name__}: {e}")
 
-                                                                                           
+            # Align with circle_packing_backup/Shinka default: pick inspirations uniformly.
             all_inspirations = list(archive_inspirations or []) + list(top_k_inspirations or [])
             cross_k = int(os.environ.get("AUTOFORMAL_CROSS_K", "1"))
             cross_k = max(1, cross_k)
@@ -899,7 +899,7 @@ def patch_init_prompts():
                         selected_ids.append(pid)
                     available.remove(chosen_idx)
 
-                                                                           
+            # Expose for downstream logging (runner can copy into metadata)
             setattr(self, "_last_cross_inspiration_ids", selected_ids)
 
             if selected:
@@ -913,14 +913,14 @@ def patch_init_prompts():
         else:
             raise ValueError(f"Invalid patch type: {patch_type}")
 
-                                                                              
+        # Always attach global meta recommendations (short) to system message.
         meta_short = _truncate_meta(meta_recommendations)
         if meta_short:
             sys_msg += "\n\n# Global Meta Recommendations (short)\n" + meta_short
 
         final_user_msg = (task_context_msg + "\n" + iter_msg).strip()
 
-                       
+        # Debug logging
         logger.info(f"[Evolution Prompt] patch_type={patch_type}")
         logger.info(f"[Evolution Prompt] sys_msg (first 500 chars):\n{sys_msg[:500]}...")
         logger.info(f"[Evolution Prompt] user_msg (first 500 chars):\n{final_user_msg[:500]}...")
@@ -938,13 +938,13 @@ def patch_all():
     patch_init_prompts()
 
 
-                                                                               
-                                  
-                                                                               
- 
-                                                                                        
-                                                                                   
- 
+# =============================================================================
+# Kimina-specific evolution prompt
+# =============================================================================
+#
+# Kimina-Autoformalizer does not reliably follow SEARCH/REPLACE or XML-markup protocols.
+# We keep the heuristic information structure but simplify the output requirements.
+#
 
 KIMINA_EVOLUTION_SYS_MSG = """You are an expert in Lean 4 theorem proving and the Mathlib library.
 
@@ -1023,25 +1023,25 @@ def build_kimina_evolution_prompt(
     """
     sys_msg = KIMINA_EVOLUTION_SYS_MSG
 
-                                       
+    # Build performance metrics string.
     perf_metrics = perf_str(combined_score, public_metrics)
 
-                                  
+    # Build text-feedback section.
     feedback_section = format_text_feedback_section(text_feedback)
 
-                                
+    # Build inspiration section.
     inspiration_section = ""
     all_inspirations = list(archive_inspirations or []) + list(top_k_inspirations or [])
     if all_inspirations:
         inspiration_section = "Here are some other successful formalizations for reference:\n\n"
-        for i, prog in enumerate(all_inspirations[:3]):                  
+        for i, prog in enumerate(all_inspirations[:3]):  # show at most 3
             score = prog.combined_score if hasattr(prog, 'combined_score') else 0.0
             code = prog.code if hasattr(prog, 'code') else str(prog)
             inspiration_section += f"**Attempt {i+1}** (score={score:.2f}):\n```{language}\n{code}\n```\n\n"
     else:
         inspiration_section = "(No previous attempts available)"
 
-                          
+    # Format user message.
     user_msg = KIMINA_EVOLUTION_ITER_MSG.format(
         language=language,
         code_content=parent_code,

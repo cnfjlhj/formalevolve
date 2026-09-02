@@ -1,18 +1,24 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "formalevolve"
 version = "0.1.0"
-description = "FormalEvolve: Neuro-Symbolic Evolutionary Search for Diverse and Prover-Effective Autoformalization"
+description = "Neuro-symbolic evolutionary search for diverse and prover-effective Lean autoformalization"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "third_party/licenses/*"]
+authors = [
+    {name = "Haijian Lu"},
+    {name = "Wei Wang"},
+    {name = "Jing Liu"},
+]
+keywords = ["autoformalization", "Lean 4", "evolutionary search", "theorem proving"]
 requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -47,6 +53,11 @@ dependencies = [
     "google-generativeai",
     "lean-interact>=0.10.5",
 ]
+[project.urls]
+Homepage = "https://github.com/cnfjlhj/formalevolve"
+Paper = "https://arxiv.org/abs/2603.19828"
+Issues = "https://github.com/cnfjlhj/formalevolve/issues"
+
 
 [tool.setuptools]
 script-files = ["shinka/shinka_launch", "shinka/shinka_visualize"]

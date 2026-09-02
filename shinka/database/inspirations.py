@@ -54,7 +54,7 @@ class ArchiveInspirationSelector(ContextSelectorStrategy):
 
         enforce_separation = getattr(self.config, "enforce_island_separation", False)
 
-                                           
+        # 1. Best program (only if correct)
         if self.best_program_id and self.best_program_id not in insp_ids:
             prog = self.get_program(self.best_program_id)
             if prog and prog.correct:
@@ -66,7 +66,7 @@ class ArchiveInspirationSelector(ContextSelectorStrategy):
                     inspirations.append(prog)
                     insp_ids.add(prog.id)
 
-                                        
+        # 2. Elites from parent's island
         num_elites = max(0, int(n * self.config.elite_selection_ratio))
         if num_elites > 0 and len(inspirations) < n and parent_island_idx is not None:
             self.cursor.execute(
@@ -87,7 +87,7 @@ class ArchiveInspirationSelector(ContextSelectorStrategy):
                     inspirations.append(prog)
                     insp_ids.add(prog.id)
 
-                                                         
+        # 3. Random correct programs from parent's island
         if len(inspirations) < n and parent_island_idx is not None:
             needed = n - len(inspirations)
             if needed > 0:
@@ -104,11 +104,11 @@ class ArchiveInspirationSelector(ContextSelectorStrategy):
                 self.cursor.execute(sql_rand, params_rand)
                 for row in self.cursor.fetchall():
                     prog = self.get_program(row["id"])
-                    if prog:                                            
+                    if prog:  # id is already not in insp_ids from query
                         inspirations.append(prog)
 
-                                                                          
-                         
+        # 4. Fallback to global random sampling if not enough inspirations
+        # found on island
         if len(inspirations) < n and not enforce_separation:
             needed = n - len(inspirations)
             if needed > 0:
@@ -163,18 +163,18 @@ class TopKInspirationSelector(ContextSelectorStrategy):
             )
             return []
 
-                                                                     
+        # Build set of IDs to exclude (parent + archive inspirations)
         excluded_ids: Set[str] = {parent.id}
         excluded_ids.update(prog.id for prog in excluded_programs)
 
         if not hasattr(self.config, "archive_size") or self.config.archive_size <= 0:
             return []
 
-                                    
+        # Query archive for programs
         placeholders = ",".join("?" * len(excluded_ids))
 
         if enforce_separation and parent_island_idx is not None:
-                                                
+            # Only search within parent's island
             query = f"""
                 SELECT p.*
                 FROM programs p
@@ -185,7 +185,7 @@ class TopKInspirationSelector(ContextSelectorStrategy):
             params = [parent_island_idx] + list(excluded_ids)
             search_scope = f"island {parent_island_idx}"
         else:
-                                                
+            # Search globally across all islands
             query = f"""
                 SELECT p.*
                 FROM programs p
@@ -213,7 +213,7 @@ class TopKInspirationSelector(ContextSelectorStrategy):
         if not archive_programs:
             return []
 
-                                                                               
+        # Sort by performance - prioritize combined_score, then average metrics
         def sort_key(prog: Any) -> float:
             if prog.combined_score is not None:
                 return prog.combined_score
@@ -224,7 +224,7 @@ class TopKInspirationSelector(ContextSelectorStrategy):
 
         sorted_programs = sorted(archive_programs, key=sort_key, reverse=True)
 
-                               
+        # Return top-k programs
         top_k = sorted_programs[:k]
 
         if top_k:

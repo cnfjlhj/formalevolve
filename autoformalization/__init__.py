@@ -20,22 +20,22 @@ from .critic_wrapper import critic_eval, close_session
 from .baseline import run_naive, run_rewrite, run_evolution, run_experiment
 
 __all__ = [
-            
+    # Models
     "Candidate",
     "Problem",
-            
+    # Config
     "Config",
-                      
+    # Lean environment
     "get_lean_server",
     "is_lean_server_available",
     "shutdown_lean_server",
-                
+    # Evaluation
     "evaluate_candidate",
     "check_lean_compile",
     "beq_plus_equiv",
     "critic_eval",
     "close_session",
-                      
+    # Baseline methods
     "run_naive",
     "run_rewrite",
     "run_evolution",

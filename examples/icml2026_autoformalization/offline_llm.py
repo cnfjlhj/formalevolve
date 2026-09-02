@@ -32,7 +32,7 @@ def load_mock_statements(path: Optional[str]) -> List[str]:
             if isinstance(data, list):
                 return [str(x).strip() for x in data if str(x).strip()]
             return []
-                                                                        
+        # Fallback: treat each non-empty line as a standalone statement.
         return [ln.strip() for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
     except Exception:
         return []
@@ -58,10 +58,10 @@ def _ensure_by_sorry(stmt: str) -> str:
     s = stmt.strip()
     if not s:
         return s
-                                             
+    # If it already ends with sorry, keep it.
     if re.search(r"\bsorry\s*$", s):
         return s
-                                                                                  
+    # If it contains ':=' but no sorry, replace any proof tail with `:= by sorry`.
     if ":=" in s:
         head = s.split(":=", 1)[0].rstrip()
         return head + " := by sorry"
@@ -94,7 +94,7 @@ def probe_openai_base_url(base_url: Optional[str], timeout_s: float = 0.8) -> LL
     if not (url.startswith("http://") or url.startswith("https://")):
         return LLMAvailability(ok=False, reason=f"non_http_base_url:{url}")
 
-                                                   
+    # OpenAI-compatible: GET /models (best-effort).
     try:
         import requests
 
@@ -126,7 +126,7 @@ class MockLLMClient:
         self.total_calls = 0
         self._counter = 0
 
-                                       
+        # Deterministic statement pool.
         pool = list(statements or [])
         if not pool:
             pool = [
@@ -135,7 +135,7 @@ class MockLLMClient:
             ]
         self._statements = pool
 
-                                                                                 
+        # Optional: allow a single "broken" first response for exercising repair.
         self._emit_broken_once = _truthy(os.environ.get("AUTOFORMAL_MOCK_EMIT_BROKEN_ONCE"))
         self._broken_emitted = False
 
@@ -149,7 +149,7 @@ class MockLLMClient:
     def _next_statement(self, kind: str) -> str:
         self._counter += 1
 
-                                                                                   
+        # Optional: emit an intentionally broken statement once to exercise repair.
         if kind == "patch" and self._emit_broken_once and not self._broken_emitted:
             self._broken_emitted = True
             return f"theorem my_mock_broken_{self._counter:04d} : True := by"

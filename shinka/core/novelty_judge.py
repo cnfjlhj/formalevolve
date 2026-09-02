@@ -45,7 +45,7 @@ class NoveltyJudge:
         if not code_embedding or generation == 0 or not parent_program:
             return False
 
-                                                                                    
+        # Check if parent program has island information and islands are initialized
         if (
             parent_program.island_idx is not None
             and hasattr(database, "island_manager")
@@ -85,7 +85,7 @@ class NoveltyJudge:
         }
 
         for attempt in range(self.max_novelty_attempts):
-                                                          
+            # Compute similarities with programs in island
             similarity_scores = database.compute_similarity(
                 code_embedding, parent_program.island_idx
             )
@@ -115,19 +115,19 @@ class NoveltyJudge:
                 )
                 return True, novelty_metadata
 
-                                                                     
+            # High similarity detected - check with LLM if configured
             should_reject = True
             novelty_cost = 0.0
 
             if self.novelty_llm_client is not None:
-                                                                 
+                # Get the most similar program for LLM comparison
                 most_similar_program = database.get_most_similar_program(
                     code_embedding, parent_program.island_idx
                 )
 
                 if most_similar_program:
                     try:
-                                                        
+                        # Read the current proposed code
                         proposed_code = Path(exec_fname).read_text(encoding="utf-8")
                         is_novel, explanation, cost = self.check_llm_novelty(
                             proposed_code, most_similar_program
@@ -139,7 +139,7 @@ class NoveltyJudge:
                         novelty_metadata["novelty_explanation"] = explanation
                     except Exception as e:
                         logger.warning(f"Error reading code for novelty check: {e}")
-                        should_reject = True                                 
+                        should_reject = True  # Default to rejection on error
 
             if should_reject:
                 logger.info(
@@ -153,7 +153,7 @@ class NoveltyJudge:
                     )
                     + ". Retrying with different parent/inspirations."
                 )
-                                                               
+                # Continue to next attempt (rejection sampling)
                 continue
             else:
                 logger.info(
@@ -164,7 +164,7 @@ class NoveltyJudge:
                 )
                 return True, novelty_metadata
 
-                                                    
+        # All attempts exhausted, reject the program
         logger.info(
             f"NOVELTY CHECK: Exhausted all {self.max_novelty_attempts} attempts, "
             "rejecting program."
@@ -209,7 +209,7 @@ class NoveltyJudge:
             content = response.content.strip()
             api_cost = response.cost or 0.0
 
-                                
+            # Parse the response
             is_novel = content.upper().startswith(
                 "NOVEL"
             ) or content.upper().startswith("**NOVEL**")

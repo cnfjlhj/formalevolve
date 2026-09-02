@@ -23,9 +23,9 @@ def plot_improvement(
     if fig is None or ax is None:
         fig, ax = plt.subplots(figsize=(20, 10))
 
-                          
-                                                             
-                                                      
+    # Plot best score line
+    # Calculate cumulative maximum and back-fill leading NaNs
+    # to ensure the line is continuous from the start.
     df = df.sort_values(by="generation")
     df_filtered = df[df["correct"]].copy()
 
@@ -37,7 +37,7 @@ def plot_improvement(
         label="Best Score",
     )
 
-                                                   
+    # Plot individual evaluations as scatter points
     scatter1 = ax.scatter(
         df_filtered["generation"],
         df_filtered["combined_score"],
@@ -50,17 +50,17 @@ def plot_improvement(
     if ylim is not None:
         ax.set_ylim(*ylim)
 
-                                   
+    # Get the path to the best node
     if plot_path_to_best_node:
         best_path_df = get_path_to_best_node(df_filtered, score_column="combined_score")
     else:
         best_path_df = pd.DataFrame()
-    line_best_path_plot = []                            
+    line_best_path_plot = []  # Initialize to empty list
 
     if not best_path_df.empty:
-                                        
+        # Plot the path to the best node
         line_best_path_plot = ax.plot(
-            best_path_df["generation"],                             
+            best_path_df["generation"],  # Use generation for x-axis
             best_path_df["combined_score"],
             linestyle="-.",
             marker="o",
@@ -69,16 +69,16 @@ def plot_improvement(
             markersize=5,
             linewidth=2,
         )
-                                                       
+        # Add annotations if 'patch_name' column exists
         if "patch_name" in best_path_df.columns:
             _place_non_overlapping_annotations(
                 ax, best_path_df, "generation", "combined_score", "patch_name"
             )
 
-                                                    
+    # Create a second y-axis for cumulative API cost
     ax2 = ax.twinx()
     handles = line1 + [scatter1]
-    if line_best_path_plot:                                
+    if line_best_path_plot:  # If the best path was plotted
         handles.extend(line_best_path_plot)
 
     labels = [h.get_label() for h in handles]
@@ -102,29 +102,29 @@ def plot_improvement(
         )
         ax2.tick_params(axis="y", which="major", labelsize=25)
         handles.extend(line2)
-        labels = [h.get_label() for h in handles]                   
+        labels = [h.get_label() for h in handles]  # Recreate labels
 
     ax.legend(handles, labels, fontsize=25, loc="lower right")
 
-                    
+    # Customize plot
     ax.set_xlabel(xlabel, fontsize=30, weight="bold")
     ax.set_ylabel(ylabel, fontsize=30, weight="bold", labelpad=25)
     ax.set_title(title, fontsize=40, weight="bold")
     ax.tick_params(axis="both", which="major", labelsize=20)
     ax.grid(True, alpha=0.3)
 
-                                                      
+    # Remove top and right spines for the primary axis
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(
         False
-    )                                                            
+    )  # Keep right spine if ax2 is present, or manage ax2 spines
 
     if "api_cost" in df_filtered.columns and ax2:
-                                                  
-        ax2.spines["top"].set_visible(False)                                
+        # Ensure ax2 spine is visible if it exists
+        ax2.spines["top"].set_visible(False)  # Match primary axis top spine
         ax2.tick_params(axis="y", which="major", labelsize=30)
 
-    fig.tight_layout()                                               
+    fig.tight_layout()  # Adjust layout to prevent overlapping labels
 
     return fig, ax
 
@@ -135,21 +135,21 @@ def _place_non_overlapping_annotations(
     """
     Places annotations with minimal overlap using a systematic approach.
     """
-                                                                      
+    # Define multiple offset positions to try (in order of preference)
     offset_positions = [
-        (40, -30),                
-        (40, 30),             
-        (-40, 30),            
-        (-40, -30),               
-        (60, 0),         
-        (-60, 0),        
-        (0, 40),       
-        (0, -40),          
-        (70, -50),                    
-        (-70, 50),                
+        (40, -30),  # bottom-right
+        (40, 30),  # top-right
+        (-40, 30),  # top-left
+        (-40, -30),  # bottom-left
+        (60, 0),  # right
+        (-60, 0),  # left
+        (0, 40),  # top
+        (0, -40),  # bottom
+        (70, -50),  # far bottom-right
+        (-70, 50),  # far top-left
     ]
 
-    placed_boxes = []                                              
+    placed_boxes = []  # Store bounding boxes of placed annotations
 
     for _, row in df.iterrows():
         patch_name_val = str(row.get(text_col, ""))
@@ -157,18 +157,18 @@ def _place_non_overlapping_annotations(
             if patch_name_val == "nan" or patch_name_val == "none":
                 patch_name_val = "Base"
 
-                                   
+            # Wrap long patch names
             patch_name_to_plot = _wrap_text(patch_name_val, max_length=15)
 
             x_pos = float(row[x_col])
             y_pos = float(row[y_col])
 
-                                                         
+            # Find the best position with minimal overlap
             best_offset, best_ha, best_va = _find_best_position(
                 ax, x_pos, y_pos, patch_name_to_plot, offset_positions, placed_boxes
             )
 
-                                  
+            # Place the annotation
             annotation = ax.annotate(
                 patch_name_to_plot,
                 (x_pos, y_pos),
@@ -195,16 +195,16 @@ def _place_non_overlapping_annotations(
                 zorder=10,
             )
 
-                                                                   
+            # Store the bounding box for future collision detection
             try:
-                                                          
+                # Get the bounding box in data coordinates
                 bbox = annotation.get_window_extent()
                 inv_transform = ax.transData.inverted()
                 bbox_data = inv_transform.transform_bbox(bbox)
                 placed_boxes.append(bbox_data)
             except Exception:
-                                                    
-                approx_width = len(patch_name_to_plot) * 0.01                  
+                # Fallback: approximate bounding box
+                approx_width = len(patch_name_to_plot) * 0.01  # rough estimate
                 approx_height = patch_name_to_plot.count("\n") * 0.02 + 0.02
                 placed_boxes.append(
                     transforms.Bbox.from_bounds(
@@ -223,26 +223,26 @@ def _wrap_text(text: str, max_length: int = 15) -> str:
     if len(text) <= max_length:
         return text
 
-                                       
+    # Try to find a good breaking point
     mid_point = len(text) // 2
 
-                                      
+    # Look for a space near the middle
     for offset in range(min(5, mid_point)):
-                               
+        # Check before midpoint
         if mid_point - offset > 0 and text[mid_point - offset] == " ":
             break_point = mid_point - offset
             part1 = text[:break_point].strip()
             part2 = text[break_point + 1 :].strip()
             return f"{part1}\n{part2}"
 
-                              
+        # Check after midpoint
         if mid_point + offset < len(text) and text[mid_point + offset] == " ":
             break_point = mid_point + offset
             part1 = text[:break_point].strip()
             part2 = text[break_point + 1 :].strip()
             return f"{part1}\n{part2}"
 
-                                            
+    # No good space found, break at midpoint
     return f"{text[:mid_point]}\n{text[mid_point:]}"
 
 
@@ -261,28 +261,28 @@ def _find_best_position(
     best_overlap_count = float("inf")
 
     for offset in offset_positions:
-                                             
+        # Determine alignment based on offset
         ha = "left" if offset[0] >= 0 else "right"
         va = "bottom" if offset[1] >= 0 else "top"
 
-                                                     
+        # Estimate the bounding box for this position
         estimated_bbox = _estimate_annotation_bbox(
             ax, x_pos, y_pos, text, offset, ha, va
         )
 
-                                                  
+        # Count overlaps with existing annotations
         overlap_count = sum(1 for bbox in placed_boxes if estimated_bbox.overlaps(bbox))
 
-                                           
+        # If no overlaps, use this position
         if overlap_count == 0:
             return offset, ha, va
 
-                                                  
+        # Track the position with minimum overlaps
         if overlap_count < best_overlap_count:
             best_overlap_count = overlap_count
             best_offset = offset
 
-                                              
+    # Return the alignment for the best offset
     ha = "left" if best_offset[0] >= 0 else "right"
     va = "bottom" if best_offset[1] >= 0 else "top"
 
@@ -301,34 +301,34 @@ def _estimate_annotation_bbox(
     """
     Estimates the bounding box of an annotation in data coordinates.
     """
-                                                               
+    # Rough estimation based on text length and number of lines
     lines = text.split("\n")
     max_line_length = max(len(line) for line in lines)
     num_lines = len(lines)
 
-                                                        
+    # Approximate dimensions (these are rough estimates)
     char_width_data = (ax.get_xlim()[1] - ax.get_xlim()[0]) / 100
     line_height_data = (ax.get_ylim()[1] - ax.get_ylim()[0]) / 50
 
     width = max_line_length * char_width_data
     height = num_lines * line_height_data
 
-                                                                  
-    x_offset_data = offset[0] * char_width_data / 8                    
-    y_offset_data = offset[1] * line_height_data / 12                    
+    # Convert offset from points to data coordinates (approximate)
+    x_offset_data = offset[0] * char_width_data / 8  # rough conversion
+    y_offset_data = offset[1] * line_height_data / 12  # rough conversion
 
-                                                      
+    # Calculate annotation position based on alignment
     if ha == "left":
         left = x_pos + x_offset_data
         right = left + width
-    else:                 
+    else:  # ha == "right"
         right = x_pos + x_offset_data
         left = right - width
 
     if va == "bottom":
         bottom = y_pos + y_offset_data
         top = bottom + height
-    else:               
+    else:  # va == "top"
         top = y_pos + y_offset_data
         bottom = top - height
 

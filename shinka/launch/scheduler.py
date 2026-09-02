@@ -96,7 +96,7 @@ class JobScheduler:
             )
 
     def _build_command(self, exec_fname_t: str, results_dir_t: str) -> List[str]:
-                                                 
+        # Docker requires workspace to be mounted
         if self.job_type == "slurm_docker":
             assert isinstance(self.config, SlurmDockerJobConfig)
             cmd = [
@@ -108,13 +108,13 @@ class JobScheduler:
                 results_dir_t,
             ]
         else:
-                                                                     
+            # For local jobs, check if conda environment is specified
             if (
                 self.job_type == "local"
                 and isinstance(self.config, LocalJobConfig)
                 and self.config.conda_env
             ):
-                                                                  
+                # Use conda run to execute in specific environment
                 cmd = [
                     "conda",
                     "run",
@@ -138,12 +138,12 @@ class JobScheduler:
                 ]
         if self.config.extra_cmd_args:
             for k, v in self.config.extra_cmd_args.items():
-                                      
+                # Handle boolean flags
                 if isinstance(v, bool):
-                    if v:                            
+                    if v:  # Only append flag if True
                         cmd.append(f"--{k}")
                 else:
-                                                                        
+                    # For non-boolean values, append both flag and value
                     cmd.extend([f"--{k}", str(v)])
         return cmd
 
@@ -197,7 +197,7 @@ class JobScheduler:
         end_time = time.time()
         rtime = end_time - start_time
 
-                                    
+        # Ensure results is not None
         if results is None:
             results = {"correct": {"correct": False}, "metrics": {}}
 
@@ -250,7 +250,7 @@ class JobScheduler:
             if isinstance(job.job_id, str):
                 status = get_job_status(job.job_id)
                 return status != ""
-            return False                                
+            return False  # Should not happen with slurm
         else:
             if isinstance(job.job_id, ProcessWithLogging):
                 if (
@@ -269,31 +269,31 @@ class JobScheduler:
                         job.job_id.kill()
                         return False
 
-                                                                     
+                # More robust status checking with exception handling
                 try:
                     return job.job_id.poll() is None
                 except Exception as e:
-                                                                                                 
+                    # If poll() fails, try alternative methods to determine if process is running
                     logger.warning(f"poll() failed for PID {job.job_id.pid}: {e}")
                     try:
-                                                                   
+                        # Try using psutil as fallback if available
                         import psutil
 
                         return psutil.pid_exists(job.job_id.pid)
                     except ImportError:
-                                                                                   
+                        # Fallback: check if PID exists using os.kill with signal 0
                         try:
                             import os
 
                             os.kill(job.job_id.pid, 0)
-                            return True                  
+                            return True  # Process exists
                         except (OSError, ProcessLookupError):
-                            return False                         
+                            return False  # Process doesn't exist
                     except Exception as e2:
                         logger.warning(
                             f"All status check methods failed for PID {job.job_id.pid}: {e2}"
                         )
-                                                                     
+                        # If all methods fail, assume process is dead
                         return False
             return False
 
@@ -355,7 +355,7 @@ class JobScheduler:
             try:
                 if self.job_type in ["slurm_docker", "slurm_conda"]:
                     if isinstance(job_id, str):
-                                                             
+                        # For SLURM jobs, use scancel command
                         import subprocess
 
                         result = subprocess.run(
@@ -363,7 +363,7 @@ class JobScheduler:
                         )
                         return result.returncode == 0
                 else:
-                                                      
+                    # For local jobs, kill the process
                     if isinstance(job_id, ProcessWithLogging):
                         job_id.kill()
                         return True

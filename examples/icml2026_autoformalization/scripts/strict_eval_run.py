@@ -1,4 +1,4 @@
-                      
+#!/usr/bin/env python3
 """
 Strict evaluation for an evolution run.
 
@@ -91,7 +91,7 @@ def _query_one(conn: sqlite3.Connection, sql: str, args: Tuple[Any, ...] = ()) -
 
 
 def _query_best_program(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
-                                                                                        
+    # Prefer non-null combined_score; break ties deterministically by timestamp then id.
     cur = conn.execute(
         """
         SELECT id, generation, island_idx, combined_score, timestamp
@@ -136,9 +136,9 @@ def _numeric_summary(values: List[float]) -> Dict[str, Any]:
 
 
 def _collect_rows(run_root: Path) -> Tuple[List[ProblemStrictRow], Dict[str, Any]]:
-                           
-                                                                                
-                                                                                     
+    # Support both layouts:
+    # - New/pilot layout (run_dataset_pilot.py):   <run_root>/runs/<problem_id>/
+    # - Legacy layout (some trend wrappers):       <run_root>/runs/ours/<problem_id>/
     runs_dir_candidates = [
         run_root / "runs" / "ours",
         run_root / "runs",
@@ -343,7 +343,7 @@ def main() -> None:
 
     rows, meta = _collect_rows(run_root)
 
-                                  
+    # Keep stable ordering in CSV.
     rows_sorted = sorted(rows, key=lambda r: r.problem_id)
 
     _write_csv(run_root / "strict_metrics_per_problem.csv", rows_sorted)

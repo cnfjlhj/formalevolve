@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use FormalEvolve, please cite the paper below."
+title: "FormalEvolve"
+type: software
+version: 0.1.0
+authors:
+  - family-names: Lu
+    given-names: Haijian
+  - family-names: Wang
+    given-names: Wei
+  - family-names: Liu
+    given-names: Jing
+license: Apache-2.0
+repository-code: "https://github.com/cnfjlhj/formalevolve"
+url: "https://arxiv.org/abs/2603.19828"
+preferred-citation:
+  type: article
+  title: "FormalEvolve: Neuro-Symbolic Evolutionary Search for Diverse Autoformalization"
+  authors:
+    - family-names: Lu
+      given-names: Haijian
+    - family-names: Wang
+      given-names: Wei
+    - family-names: Liu
+      given-names: Jing
+  year: 2026
+  url: "https://arxiv.org/abs/2603.19828"

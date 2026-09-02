@@ -37,11 +37,11 @@ class ProcessWithLogging:
 
     def cleanup_logging(self):
         """Clean up logging threads and files."""
-                                            
+        # Wait for logging threads to finish
         for thread in self.log_threads:
             thread.join(timeout=1.0)
 
-                         
+        # Close log files
         for file_handle in self.log_files:
             try:
                 file_handle.close()
@@ -62,7 +62,7 @@ def _stream_output(pipe, file_handle, verbose_prefix=None):
         for line in iter(pipe.readline, ""):
             if line:
                 file_handle.write(line)
-                file_handle.flush()                                 
+                file_handle.flush()  # Force immediate write to disk
                 if verbose_prefix:
                     logger.debug(f"{verbose_prefix}: {line.strip()}")
     except Exception as e:
@@ -89,27 +89,27 @@ def submit(log_dir: str, cmd: list[str], verbose: bool = False):
     stdout_path = log_dir_path / "job_log.out"
     stderr_path = log_dir_path / "job_log.err"
 
-                                                   
+    # Set up environment to force unbuffered output
     env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"                                 
-    env["PYTHONIOENCODING"] = "utf-8"                          
+    env["PYTHONUNBUFFERED"] = "1"  # Force Python to be unbuffered
+    env["PYTHONIOENCODING"] = "utf-8"  # Ensure proper encoding
 
-                                                                   
+    # Use PIPE to capture output and redirect to files in real-time
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        bufsize=1,                 
+        bufsize=1,  # Line buffered
         universal_newlines=True,
         env=env,
     )
 
-                                                    
+    # Open log files for writing with line buffering
     stdout_file = open(stdout_path, "w", buffering=1)
     stderr_file = open(stderr_path, "w", buffering=1)
 
-                                                          
+    # Start threads to stream output to files in real-time
     stdout_thread = threading.Thread(
         target=_stream_output,
         args=(process.stdout, stdout_file, "STDOUT" if verbose else None),
@@ -124,7 +124,7 @@ def submit(log_dir: str, cmd: list[str], verbose: bool = False):
     stdout_thread.start()
     stderr_thread.start()
 
-                                              
+    # Create wrapper with logging capabilities
     wrapped_process = ProcessWithLogging(
         process, (stdout_file, stderr_file), (stdout_thread, stderr_thread)
     )
@@ -174,7 +174,7 @@ def monitor(
             logger.info(f"Process {process.pid} is still running...")
         time.sleep(poll_interval)
 
-                                
+    # Clean up logging resources
     process.cleanup_logging()
 
     return_code = process.returncode

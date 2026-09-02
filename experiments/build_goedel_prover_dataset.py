@@ -1,4 +1,4 @@
-                      
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -141,8 +141,8 @@ def _load_hf_formal_map(
     formal_column: str,
 ) -> Dict[str, str]:
     try:
-        from datasets import load_dataset                
-    except Exception as e:                    
+        from datasets import load_dataset  # type: ignore
+    except Exception as e:  # pragma: no cover
         raise RuntimeError(
             "Missing dependency for --hf_dataset: `datasets`. "
             "Install it or run without HF overrides."
@@ -293,14 +293,14 @@ def _force_by_sorry(stmt: str) -> str:
     stmt = (stmt or "").strip()
     if not stmt:
         return ""
-                                                                      
-     
-          
-                                                                                                      
-                                 
-                                                                                                    
-     
-                                                                            
+    # Normalize all declarations to the same prover-friendly skeleton.
+    #
+    # Why:
+    # - Some exported statements end with `:= sorry` (no `by`), while Goedel's prompting/merging logic
+    #   expects a `:= by` marker.
+    # - Even when `:= by` exists, we want to strip any existing body and canonicalize to `by sorry`.
+    #
+    # This makes downstream proving robust and keeps k-selection comparable.
     if ":=" not in stmt:
         return stmt
     head = stmt.split(":=", 1)[0].rstrip()
@@ -620,7 +620,7 @@ def main() -> int:
     num_header_sorry_skipped = 0
     num_missing_problem_config = 0
     hf_formal_by_name: Dict[str, str] = {}
-                                                               
+    # Auto-fill HF defaults for with_solution if none provided.
     if str(args.mode) == "ground_truth" and str(args.solution_mode) == "with_solution":
         if not str(args.hf_dataset or "").strip():
             args.hf_dataset = "AI-MO/CombiBench"
@@ -770,9 +770,9 @@ def main() -> int:
                 full_lean4_code = _compose_lean_file(header=header_prover, statement=s.statement)
                 rec = {
                     "problem_id": attempt_id,
-                                                                                          
+                    # For Goedel's inference.py (local backend): expects a full Lean file.
                     "lean4_code": full_lean4_code,
-                                                                                                     
+                    # For our remote backend / analysis: keep statement-only + raw/sanitized headers.
                     "statement": s.statement,
                         "header": header_curr,
                         "header_prover": header_prover,

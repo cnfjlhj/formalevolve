@@ -1,4 +1,4 @@
-                      
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -127,7 +127,7 @@ def _remove_comments_lean_escaped(content_escaped: str) -> str:
     if not s:
         return ""
 
-                
+    # Fast path.
     if "--" not in s and "/-" not in s:
         return s
 
@@ -135,22 +135,22 @@ def _remove_comments_lean_escaped(content_escaped: str) -> str:
     i = 0
     n = len(s)
     while i < n:
-                        
+        # Block comment.
         if i + 1 < n and s[i] == "/" and s[i + 1] == "-":
             j = s.find("-/", i + 2)
             if j == -1:
-                                                        
+                # Unclosed block comment: drop the rest.
                 break
             i = j + 2
             continue
 
-                       
+        # Line comment.
         if i + 1 < n and s[i] == "-" and s[i + 1] == "-":
             j = s.find(r"\n", i + 2)
             if j == -1:
-                                         
+                # Comment to end-of-file.
                 break
-                                      
+            # Preserve newline escape.
             out.append(r"\n")
             i = j + 2
             continue
@@ -296,8 +296,8 @@ def _scan_compilation_group_sets(
     complete_groups: Set[str] = set()
     aligned_groups: Set[str] = set()
 
-                                                                                               
-                                                                                      
+    # Fast path: load the compilation JSON array with the built-in JSON parser (C-accelerated).
+    # This is typically much faster than regex-based streaming scans for ~100MB files.
     try:
         obj = _read_json(compilation_json)
         if isinstance(obj, list):
@@ -328,7 +328,7 @@ def _scan_compilation_group_sets(
                                         aligned_groups.add(group)
             return pass_groups, complete_groups, aligned_groups
     except Exception:
-                                      
+        # Fall back to streaming scan.
         pass
 
     cur_attempt: Optional[str] = None
@@ -360,7 +360,7 @@ def _scan_compilation_group_sets(
             processed_aligned = True
             return
 
-                                                                                           
+        # Decode JSON string for comment stripping (slow path, only for complete attempts).
         try:
             code = json.loads(cur_code_raw)
         except Exception:
@@ -403,7 +403,7 @@ def _scan_compilation_group_sets(
                 if m:
                     cur_attempt = m.group(1)
                     cur_group = (cur_attempt.split("__", 1)[0] or "").strip() or None
-                                                                             
+                    # If pass/complete were observed before name, record now.
                     if cur_group is not None:
                         if cur_pass:
                             pass_groups.add(cur_group)
@@ -529,7 +529,7 @@ def _scan_compilation_aligned_complete_groups(
     rr64_dataset_jsonl: Path,
     forbid_keywords: Optional[List[str]] = None,
 ) -> Set[str]:
-                                  
+    # Backward-compatible wrapper.
     _pass_groups, _complete_groups, aligned_groups = _scan_compilation_group_sets(
         compilation_json=compilation_json,
         rr64_dataset_jsonl=rr64_dataset_jsonl,
@@ -674,7 +674,7 @@ def _paired_density_comparison(
         od = _safe_int(o.get(key_den), 0)
         bd = _safe_int(b.get(key_den), 0)
         if od <= 0 or bd <= 0:
-                                                                       
+            # Should not happen under overlap_attempted, but keep safe.
             continue
         ov = float(_safe_int(o.get(key_num), 0)) / float(od)
         bv = float(_safe_int(b.get(key_num), 0)) / float(bd)
@@ -870,10 +870,10 @@ def main() -> int:
         _warn("no summary.json files found under out_root")
         return 2
 
-                                                                                                       
-                                                                          
-                                              
-                                                                               
+    # Optional head-to-head analysis (helps reduce variance by conditioning on the same attempted set).
+    # We compute pairwise comparisons between `ours` and each baseline on:
+    #   - full denominator (benchmark_all_ids)
+    #   - overlap-attempted denominator (active_ids_ours ∩ active_ids_baseline)
     head_to_head: Dict[str, Any] = {}
     for tag in tags:
         benchmark_all_ids = benchmark_all_ids_by_tag.get(tag, set())
@@ -933,14 +933,14 @@ def main() -> int:
                     ),
                 }
 
-                                                                                                         
-                                                                                                    
-                                                                                                      
-                                                               
+            # Density-style comparisons (attempt success fraction per problem) to reduce prover variance.
+            # Note: aligned_complete density would ideally be derived from compilation JSON; here we
+            # approximate "density" for pass/complete/theorem_complete from per_problem attempt flags,
+            # and keep aligned_complete as solved-level metric.
             ours_counts = per_method_counts.get("ours") or {}
             base_counts = per_method_counts.get(baseline) or {}
 
-                                                                                                             
+            # aligned-complete density requires compilation JSON scanning (per-attempt, not just solved/not).
             _p, _c, _a, ours_aligned_counts = _scan_compilation_group_sets_with_aligned_counts(
                 compilation_json=out_root / "ours" / tag / "goedel_out" / "code_compilation_repl.json",
                 rr64_dataset_jsonl=out_root / "ours" / tag / f"{tag}_dataset.jsonl",
@@ -981,8 +981,8 @@ def main() -> int:
                 },
             }
 
-                                                                                                              
-                                                                                     
+            # "Common correct problems" robustness: among problems BOTH methods solved (on overlap_attempted),
+            # compare success density; this reduces portfolio randomness sensitivity.
             common_correct: Dict[str, Any] = {}
             for metric, num_key, solved_key in [
                 ("pass", "pass_attempts", "pass"),

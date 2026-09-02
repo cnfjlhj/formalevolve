@@ -13,18 +13,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-                                        
+# Configuration for Docker image caching
 DOCKER_CACHE_DIR = Path(os.path.expanduser("~/docker_cache"))
 try:
     DOCKER_CACHE_DIR.mkdir(exist_ok=True)
 except PermissionError:
-                                                                           
-                                                                            
-                                                                                 
+    # This can happen if the module is imported in a restricted environment
+    # (like a Docker container) where the user doesn't have a home directory
+    # or write access to it. This is fine if we're not using the caching feature.
     pass
 CACHE_MANIFEST = DOCKER_CACHE_DIR / "cache_manifest.json"
 
-                                    
+# track local jobs for status checks
 LOCAL_JOBS: dict[str, dict] = {}
 
 
@@ -46,26 +46,26 @@ def get_local_image(image_name):
     """Check if image exists locally and return the appropriate image name."""
     manifest = load_cache_manifest()
 
-                                   
+    # Check if image is in manifest
     if image_name in manifest:
         local_path = DOCKER_CACHE_DIR / manifest[image_name]
         if local_path.exists():
-                                                                  
+            # Return original image name instead of local registry
             return image_name
 
-                                     
+    # Try to pull and cache the image
     try:
         logger.info(f"Pulling and caching {image_name}...")
         subprocess.run(["docker", "pull", image_name], check=True)
 
-                        
+        # Save the image
         image_file = f"{image_name.replace('/', '_').replace(':', '_')}.tar"
         image_path = DOCKER_CACHE_DIR / image_file
         subprocess.run(
             ["docker", "save", image_name, "-o", str(image_path)], check=True
         )
 
-                         
+        # Update manifest
         manifest[image_name] = image_file
         save_cache_manifest(manifest)
 
@@ -182,8 +182,8 @@ else
 fi
 """
     else:
-                                               
-        get_local_image(image)                                            
+        # Fallback to existing pull/cache logic
+        get_local_image(image)  # This function pulls and caches the image
         image_file = f"{image.replace('/', '_').replace(':', '_')}.tar"
         load_command = f"""
 if [ -f "{DOCKER_CACHE_DIR}/{image_file}" ]; then
@@ -227,7 +227,7 @@ fi
     result = subprocess.run(
         ["sbatch", sbatch_path], stdout=subprocess.PIPE, check=True, text=True
     )
-                                                  
+    # Slurm replies: "Submitted batch job <jobid>"
     job_id = result.stdout.strip().split()[-1]
     if verbose:
         logger.info(f"Submitted Docker job {job_id}")
@@ -309,7 +309,7 @@ def submit_conda(
         logger.info(f"Failed sbatch script: {sbatch_script}")
         raise
 
-                                                  
+    # Slurm replies: "Submitted batch job <jobid>"
     job_id = result.stdout.strip().split()[-1]
     if verbose:
         logger.info(f"Submitted Conda job {job_id}")
@@ -372,7 +372,7 @@ def submit_local_docker(
     os.makedirs(log_dir_path, exist_ok=True)
     image_name = get_local_image(image)
     image_file = f"{image.replace('/', '_').replace(':', '_')}.tar"
-                                     
+    # build bash command with logging
     full = (
         f"if [ -f '{DOCKER_CACHE_DIR}/{image_file}' ]; then "
         f"docker load < '{DOCKER_CACHE_DIR}/{image_file}'; "
@@ -455,7 +455,7 @@ def monitor(job_id, results_dir=None, poll_interval=10, verbose: bool = False):
     if verbose:
         logger.info(f"Monitoring job {job_id}...")
 
-                        
+    # Monitor job status
     while True:
         status = get_job_status(job_id)
         if status == "":

@@ -22,13 +22,13 @@ theorem t (s : Finset (EuclideanSpace ℝ (Fin 2))) : True := by sorry
         out, info = apply_evolast_to_lean_code(
             code,
             mode="aggressive",
-            p=0.0,                                                      
+            p=0.0,  # no rewrites; still must not corrupt binder surface
             seed=0,
             max_rewrites=0,
         )
         self.assertTrue(bool(info.get("ok", False)))
-                                                                                  
-                                                                           
+        # Regression: previous buggy binder parsing used `rstrip(")]}")` and would
+        # drop nested `))` from the type, producing unbalanced parentheses.
         self.assertIn("(s : Finset (EuclideanSpace ℝ (Fin 2)))", out)
         self.assertIn("Fin 2)))", out)
 

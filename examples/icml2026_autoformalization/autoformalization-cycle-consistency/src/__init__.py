@@ -30,19 +30,19 @@ from .config import (
 )
 
 __all__ = [
-          
+    # Core
     "CycleConsistencyAutoformalization",
     "CycleConsistencyResult",
     "FormalizationCandidate",
     "autoformalize_with_cycle_consistency",
-                      
+    # Model interfaces
     "LLMInterface",
     "GenerationResult",
     "LogProbResult",
     "OpenAICompatibleLLM",
     "HuggingFaceLLM",
     "DummyLLM",
-            
+    # Config
     "Config",
     "ModelConfig",
     "CycleConsistencyConfig",

@@ -17,8 +17,8 @@ import os
 import sys
 from typing import Tuple, Optional
 
-                                                                         
-                                                                         
+# Optional: allow local BEq+ checkout without hard-coding personal paths.
+# If unset, BEq+ is simply disabled unless installed as a Python package.
 BEQ_PLUS_PATH = os.environ.get("BEQ_PLUS_PATH", "").strip()
 if BEQ_PLUS_PATH:
     sys.path.insert(0, BEQ_PLUS_PATH)
@@ -31,9 +31,9 @@ from .critic_wrapper import critic_eval
 logger = logging.getLogger(__name__)
 
 
-                                                                              
-                                              
-                                                                              
+# ============================================================================
+# Lean Compile Check (uses a real Lean server)
+# ============================================================================
 
 def check_lean_compile(candidate: Candidate, timeout: int = 60) -> Tuple[bool, str]:
     """
@@ -63,16 +63,16 @@ def check_lean_compile(candidate: Candidate, timeout: int = 60) -> Tuple[bool, s
     if not stmt:
         return False, "Empty code"
 
-                                                      
+    # Ensure there is a top-level declaration keyword.
     if not any(kw in stmt for kw in ["theorem", "lemma", "def", "example"]):
         return False, "Missing theorem/lemma/def/example keyword"
 
-                                                            
+    # If the candidate forgot to include `:=`, force-add it.
     if ":=" not in stmt:
         if not stmt.endswith(":="):
             stmt = stmt + " :="
 
-                                                                       
+    # Append a placeholder proof so Lean can elaborate the declaration.
     if " :=" in stmt and "sorry" not in stmt.lower() and "by" not in stmt:
         stmt = stmt + " by\n  admit"
 
@@ -89,23 +89,23 @@ def check_lean_compile(candidate: Candidate, timeout: int = 60) -> Tuple[bool, s
             if res.lean_code_is_valid():
                 return True, ""
             else:
-                                         
+                # Collect error messages.
                 errors = [m.data for m in res.messages if m.severity == "error"]
                 return False, "\n".join(errors) if errors else "Unknown Lean error"
 
-                                   
+        # Unexpected response type.
         return False, "Unknown Lean response type"
 
     except TimeoutError:
         return False, f"[Timeout] Lean compile timeout after {timeout}s"
     except Exception as e:
-                                             
+        # Avoid crashing the whole evaluator.
         return False, f"[Exception] {type(e).__name__}: {e}"
 
 
-                                                                              
-                                      
-                                                                              
+# ============================================================================
+# BEq+ Equivalence Check (actual BEq+)
+# ============================================================================
 
 def beq_plus_equiv(
     candidate: Candidate,
@@ -156,14 +156,14 @@ def beq_plus_equiv(
         return 1 if ok else 0
 
     except Exception as e:
-                                                                          
+        # If BEq+ fails, treat as "not proven", never as a negative label.
         logger.debug(f"[BEq+] error: {e}")
         return 0
 
 
-                                                                              
-                          
-                                                                              
+# ============================================================================
+# Full Evaluation Pipeline
+# ============================================================================
 
 async def evaluate_candidate(
     cand: Candidate,
@@ -187,7 +187,7 @@ async def evaluate_candidate(
     Returns:
         Updated candidate with all evaluation fields filled.
     """
-                      
+    # 1. Compile check
     ok, err = check_lean_compile(cand, timeout=config.compile_timeout)
     cand.compile_ok = ok
     cand.compile_error = err
@@ -198,7 +198,7 @@ async def evaluate_candidate(
         cand.critic_raw = ""
         return cand
 
-                          
+    # 2. BEq+ (if enabled)
     if config.use_beq_plus:
         cand.beq_flag = beq_plus_equiv(
             cand,
@@ -209,12 +209,12 @@ async def evaluate_candidate(
     else:
         cand.beq_flag = 0
 
-                   
+    # 3. CriticLean
     s_sem, raw = await critic_eval(
         informal=problem.nl_statement,
         formal=cand.code,
     )
-    cand.s_sem = s_sem          
+    cand.s_sem = s_sem  # 0 or 1
     cand.critic_raw = raw
 
     return cand
@@ -243,9 +243,9 @@ async def batch_evaluate(
     return results
 
 
-                                                                              
-      
-                                                                              
+# ============================================================================
+# Test
+# ============================================================================
 
 if __name__ == "__main__":
     import asyncio
@@ -254,7 +254,7 @@ if __name__ == "__main__":
     async def test():
         print("Testing evaluator module...")
 
-                                           
+        # Create test candidate and problem
         test_candidate = Candidate(
             code="theorem test (n : ℕ) (hn : n % 2 = 1) : 8 ∣ n^2 - 1 :=",
             header="""import Mathlib
@@ -276,7 +276,7 @@ open scoped BigOperators""",
 
         test_config = Config(
             compile_timeout=60,
-            use_beq_plus=False,                               
+            use_beq_plus=False,  # Disable BEq+ for quick test
         )
 
         print(f"\nCandidate code: {test_candidate.code}")
@@ -293,7 +293,7 @@ open scoped BigOperators""",
         print(f"  soft_success: {result.soft_success}")
         print(f"  strict_success: {result.strict_success}")
 
-                 
+        # Cleanup
         from .critic_wrapper import close_session
         await close_session()
 

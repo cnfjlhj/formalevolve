@@ -1,4 +1,4 @@
-                      
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -54,7 +54,7 @@ def _load_hf_answer_map(
     answer_column: str,
 ) -> Dict[str, Optional[List[str]]]:
     try:
-        from datasets import load_dataset                
+        from datasets import load_dataset  # type: ignore
     except Exception as e:
         raise RuntimeError(f"datasets not available (needed for HF answer checks): {type(e).__name__}: {e}") from e
 
@@ -166,16 +166,16 @@ def _fine_eval_precheck(*, full_code: str, formal_statement: str, forbid_keyword
 
     tmpl = _remove_comments_lean(formal_statement).strip()
     if not tmpl:
-                                                                       
+        # If we don't have a template, only enforce forbidden keywords.
         return True, ""
 
-                                                                                
-                                                                  
+    # Mirror CombiBench's `extract_code_and_answer_from_text` containment check.
+    # Split template by double newlines and by theorem boundaries.
     parts: List[str] = []
     for chunk in tmpl.split("\n\n"):
         if not chunk.strip():
             continue
-                                                                                      
+        # Normalize so that theorem blocks are split as in CombiBench evaluation code.
         chunk = chunk.replace("\nnoncomputable theorem", "\n\nnoncomputable theorem")
         chunk = chunk.replace("\ntheorem", "\n\ntheorem")
         parts.append(chunk)
@@ -193,7 +193,7 @@ def _fine_eval_precheck(*, full_code: str, formal_statement: str, forbid_keyword
 
     missing = [s for s in filtered if s not in out]
     if missing:
-                                                                       
+        # Keep message short; detailed diffs go to logs via saved JSON.
         return False, f"FINE_EVAL: missing {len(missing)} formal-statement chunks in output"
     return True, ""
 
@@ -214,13 +214,13 @@ def _append_solution_answer_checks(
     """
     tags = _fine_eval_extract_solution_tags(formal_statement)
     if not tags:
-                                                                                                          
+        # Not a fill-in-the-blank task; do not enforce answers even if the dataset has an `answer` column.
         return True, "", full_code
 
     theorem_name = _combibench_theorem_name(problem_id)
     ground_truths = answer_map.get(theorem_name)
     if not ground_truths:
-                                                                                              
+        # No ground-truth answers available; skip answer checks (matches CombiBench behavior).
         return True, "", full_code
 
     if len(tags) != len(ground_truths):
@@ -235,7 +235,7 @@ def _append_solution_answer_checks(
         gt_s = str(gt or "").strip()
         if not gt_s:
             return False, "FINE_EVAL: empty ground_truth answer string", full_code
-                                                                                         
+        # Match CombiBench's verifier string (whitespace around ':' is optional in Lean).
         out += f"\n\nexample: {tag} = {gt_s} := by\n  try rfl\n  try norm_num"
     return True, "", out
 
@@ -321,9 +321,9 @@ def _compile_via_http(
             "system_errors": f"HTTP EXCEPTION: {type(e).__name__}: {e}",
         }
     finally:
-                                                                               
-                                                                            
-                                         
+        # IMPORTANT: always close the response so the underlying TCP connection
+        # is released back to the pool. This prevents FD/socket leaks during
+        # long-running compilation loops.
         if resp is not None:
             try:
                 resp.close()
@@ -350,7 +350,7 @@ def _compile_via_http(
     sorries = [w for w in warnings if "declaration uses 'sorry'" in str(w.get("data") or "")]
 
     pass_ok = bool(len(errors) == 0)
-                                                                                                         
+    # Align with CombiBench verifier behavior: only `error` severity (and `sorry` warnings) fail a proof.
     complete_ok = bool(pass_ok and not sorries)
 
     return {
@@ -443,11 +443,11 @@ def _compile_group(
     fine_eval_answer_map: Optional[Dict[str, Optional[List[str]]]],
 ) -> List[Dict[str, Any]]:
     session = requests.Session()
-                                                                             
-                                                                             
-                                                                    
-                                                                            
-                                                                       
+    # Conservative pool sizing: each session is used serially within a group,
+    # and responses are explicitly closed in `_compile_via_http`. Keeping the
+    # pool small reduces worst-case FD/socket pressure in long runs.
+    # Small pool per thread reduces server pressure and FD usage while still
+    # allowing keep-alive reuse inside the group's sequential requests.
     adapter = HTTPAdapter(pool_connections=2, pool_maxsize=2, max_retries=0)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
@@ -464,11 +464,11 @@ def _compile_group(
             comp_prev = prev.get("compilation_result") or {}
             if early_stop_enabled and isinstance(comp_prev, dict) and bool(comp_prev.get(early_stop_field, False)):
                 break
-                              
-                                                                                                 
-                                                                                                                 
-                                                                                                         
-                                                                                                       
+            # Resume behavior:
+            # - If the input code for the same attempt name is unchanged, keep the cached result.
+            # - If the input code changed (e.g., inference retried after infra timeout), recompile and overwrite.
+            # NOTE: historical output records store the compiled Lean source in `code` (not `full_code`).
+            # Use `full_code` when present, otherwise fall back to `code` to make `--resume` effective.
             prev_code = prev.get("full_code")
             if prev_code is None:
                 prev_code = prev.get("code")
@@ -479,8 +479,8 @@ def _compile_group(
             if cur_code is None:
                 cur_code = ""
             cur_code_str = str(cur_code)
-                                                                                                           
-                                                                       
+            # If the previous compilation hit an infra/system error (HTTP timeout, connection error, etc.),
+            # we should recompile even if the code itself is unchanged.
             sys_err = ""
             if isinstance(comp_prev, dict):
                 sys_err = str(comp_prev.get("system_errors") or "").strip()
@@ -738,7 +738,7 @@ def main() -> int:
                 ordered.append(rec)
         _atomic_write_json(output_path, ordered)
 
-                                                                           
+    # Normalize current input code for "resume but code changed" detection.
     input_code_by_name: Dict[str, str] = {}
     for r in raw:
         if not isinstance(r, dict):
@@ -762,8 +762,8 @@ def main() -> int:
         names = [str(r.get("name") or r.get("problem_id") or "").strip() for r in attempts]
         names = [n for n in names if n]
         if names and all(n in existing_by_name for n in names):
-                                                                                              
-                                                                                       
+            # Even when all attempts exist, we may need to recompile if the input code changed
+            # since the last compilation (e.g., inference retried after infra timeout).
             any_changed = False
             any_retryable = False
             for n in names:
@@ -771,7 +771,7 @@ def main() -> int:
                 if not isinstance(prev, dict):
                     any_changed = True
                     break
-                                                                                                  
+                # See `_compile_group`: older records store the compiled Lean source under `code`.
                 prev_code = prev.get("full_code")
                 if prev_code is None:
                     prev_code = prev.get("code")

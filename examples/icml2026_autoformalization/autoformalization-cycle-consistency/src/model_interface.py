@@ -27,9 +27,9 @@ class GenerationResult:
 @dataclass
 class LogProbResult:
     """Result of log probability computation"""
-    log_prob: float                         
-    num_tokens: int                    
-    per_token_log_probs: Optional[List[float]] = None                       
+    log_prob: float  # Total log probability
+    num_tokens: int  # Number of tokens
+    per_token_log_probs: Optional[List[float]] = None  # Per-token breakdown
 
     @property
     def normalized_log_prob(self) -> float:
@@ -110,7 +110,7 @@ class OpenAICompatibleLLM(LLMInterface):
         self.model = model
         self.client = OpenAI(
             base_url=base_url,
-            api_key=api_key or "dummy",                                     
+            api_key=api_key or "dummy",  # Some local servers don't need key
         )
         logger.info(f"Initialized OpenAI-compatible LLM: {model}")
 
@@ -156,14 +156,14 @@ class OpenAICompatibleLLM(LLMInterface):
         Note: This requires the model to support logprobs in the API.
         For chat models, we concatenate and use completion API.
         """
-                             
+        # Construct full text
         if system_prompt:
             full_prompt = f"{system_prompt}\n\n{prompt}"
         else:
             full_prompt = prompt
 
         try:
-                                                 
+            # Try using completions API with echo
             response = self.client.completions.create(
                 model=self.model,
                 prompt=full_prompt + completion,
@@ -172,16 +172,16 @@ class OpenAICompatibleLLM(LLMInterface):
                 logprobs=1,
             )
 
-                                                       
+            # Extract logprobs for completion part only
             logprobs = response.choices[0].logprobs
             if logprobs and logprobs.token_logprobs:
-                                               
-                 
-                                                                                                      
+                # Find where completion starts.
+                #
+                # Preferred: use token byte offsets returned by the server to avoid an extra API call.
                 prompt_tokens = None
                 text_offsets = getattr(logprobs, "text_offset", None)
                 if text_offsets:
-                                                                                                         
+                    # NOTE: vLLM-style servers often report byte offsets (UTF-8), not Python str indices.
                     boundary = len(full_prompt.encode("utf-8"))
                     for i, off in enumerate(text_offsets):
                         if off is not None and int(off) >= boundary:
@@ -190,7 +190,7 @@ class OpenAICompatibleLLM(LLMInterface):
                     if prompt_tokens is None:
                         prompt_tokens = len(logprobs.token_logprobs)
                 else:
-                                                                                       
+                    # Fallback: count prompt tokens via a second echo+logprobs request.
                     prompt_tokens = len(
                         self.client.completions.create(
                             model=self.model,
@@ -212,23 +212,23 @@ class OpenAICompatibleLLM(LLMInterface):
         except Exception as e:
             logger.warning(f"Completions API failed: {e}, trying alternative method")
 
-                                              
-                                                        
+        # Fallback: Use a simple approximation
+        # Generate with logprobs and check if it matches
         return self._compute_log_prob_fallback(full_prompt, completion)
 
     def _compute_log_prob_fallback(self, prompt: str, completion: str) -> LogProbResult:
         """Fallback method when logprobs API is not available"""
-                                                                
-                                                           
+        # This is a rough approximation - generate with logprobs
+        # and sum the probabilities of the generated tokens
         logger.warning("Using fallback log prob computation (may be less accurate)")
 
         try:
             response = self.client.completions.create(
                 model=self.model,
                 prompt=prompt,
-                max_tokens=len(completion.split()) * 2,                  
+                max_tokens=len(completion.split()) * 2,  # rough estimate
                 logprobs=1,
-                temperature=0,                             
+                temperature=0,  # greedy to get most likely
             )
 
             if response.choices[0].logprobs:
@@ -242,7 +242,7 @@ class OpenAICompatibleLLM(LLMInterface):
         except Exception as e:
             logger.error(f"Fallback also failed: {e}")
 
-                                                    
+        # Ultimate fallback: return a very low score
         return LogProbResult(log_prob=-100.0, num_tokens=1)
 
 
@@ -292,7 +292,7 @@ class HuggingFaceLLM(LLMInterface):
     ) -> List[GenerationResult]:
         import torch
 
-                       
+        # Format prompt
         if system_prompt:
             full_prompt = f"{system_prompt}\n\n{prompt}"
         else:
@@ -311,7 +311,7 @@ class HuggingFaceLLM(LLMInterface):
                     pad_token_id=self.tokenizer.eos_token_id,
                 )
 
-                                    
+            # Decode only new tokens
             new_tokens = outputs[0][inputs.input_ids.shape[1]:]
             text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
@@ -337,13 +337,13 @@ class HuggingFaceLLM(LLMInterface):
         import torch
         import torch.nn.functional as F
 
-                       
+        # Format prompt
         if system_prompt:
             full_prompt = f"{system_prompt}\n\n{prompt}"
         else:
             full_prompt = prompt
 
-                                                   
+        # Tokenize prompt and completion separately
         prompt_ids = self.tokenizer(full_prompt, return_tensors="pt").input_ids
         full_ids = self.tokenizer(full_prompt + completion, return_tensors="pt").input_ids
 
@@ -351,22 +351,22 @@ class HuggingFaceLLM(LLMInterface):
         full_len = full_ids.shape[1]
 
         if full_len <= prompt_len:
-                                                       
+            # Completion is empty or tokenization issue
             return LogProbResult(log_prob=0.0, num_tokens=0)
 
-                        
+        # Move to device
         full_ids = full_ids.to(self.model.device)
 
-                      
+        # Forward pass
         with torch.no_grad():
             outputs = self.model(full_ids)
             logits = outputs.logits
 
-                                                         
-                                                    
+        # Compute log probabilities for completion tokens
+        # logits[i] predicts token[i+1], so we shift
         log_probs = F.log_softmax(logits, dim=-1)
 
-                                                    
+        # Get log probs for actual completion tokens
         completion_log_probs = []
         for i in range(prompt_len - 1, full_len - 1):
             next_token_id = full_ids[0, i + 1].item()
@@ -413,7 +413,7 @@ class DummyLLM(LLMInterface):
         system_prompt: Optional[str] = None,
     ) -> LogProbResult:
         import random
-                                            
+        # Return random log prob for testing
         return LogProbResult(
             log_prob=random.uniform(-100, -50),
             num_tokens=len(completion.split()),

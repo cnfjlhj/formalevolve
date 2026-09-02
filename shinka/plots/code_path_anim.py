@@ -30,48 +30,48 @@ best_path = get_path_to_best_node(df)
 store_best_path(best_path, results_dir)
 best_path_dir = os.path.join(results_dir, "best_path")
 
-                             
+# copy main.py to original.py
 shutil.copy(f"{best_path_dir}/main.py", f"{best_path_dir}/original.py")
-                       
-BASE_CODE_FILE = f"{best_path_dir}/original.py"                               
-PATCH_DIR = f"{best_path_dir}/patches"                                          
+# --- Configuration ---
+BASE_CODE_FILE = f"{best_path_dir}/original.py"  # Replace with your base file
+PATCH_DIR = f"{best_path_dir}/patches"  # Directory containing your .patch files
 
-                                                                          
-                                                                        
-                             
+# Custom patch labels (optional) - if provided, these will be used instead
+# of patch file names. Set to None to use patch file names, or provide a
+# list of custom descriptions
 INIT_LABEL_STATE = "Initial"
 patch_labels = best_path.patch_name.iloc[1:].tolist()
 
 
 OUTPUT_VIDEO = f"{results_dir}/code_evolution.mp4"
-                      
-                      
-VIDEO_WIDTH = 3840                               
-VIDEO_HEIGHT = 2160                               
+# 2560×1440 (2K / QHD)
+# 3840×2160 (4K / UHD)
+VIDEO_WIDTH = 3840  # Increased from 1920 to 3840
+VIDEO_HEIGHT = 2160  # Increased from 1080 to 2160
 FPS = 25
 
-                         
-CENTER_CONTENT = True                                          
+# Center content in frame
+CENTER_CONTENT = True  # Set to True to center content in frame
 
-                    
+# Background setting
 USE_WHITE_BACKGROUND = (
-    True                                                               
+    True  # Set to True for white background, False for dark background
 )
 
-            
-                                                         
+# Appearance
+# Try these common monospace fonts in order of preference
 FONT_PATH = (
-    "/System/Library/Fonts/Menlo.ttc"           
+    "/System/Library/Fonts/Menlo.ttc"  # Default
     if os.path.exists("/System/Library/Fonts/Menlo.ttc")
-    else "/System/Library/Fonts/SFMono-Regular.otf"           
+    else "/System/Library/Fonts/SFMono-Regular.otf"  # SF Mono
     if os.path.exists("/System/Library/Fonts/SFMono-Regular.otf")
-    else "/System/Library/Fonts/Monaco.ttf"          
+    else "/System/Library/Fonts/Monaco.ttf"  # Monaco
     if os.path.exists("/System/Library/Fonts/Monaco.ttf")
-    else "/System/Library/Fonts/Courier.ttc"           
+    else "/System/Library/Fonts/Courier.ttc"  # Courier
     if os.path.exists("/System/Library/Fonts/Courier.ttc")
-    else "/System/Library/Fonts/Andale Mono.ttf"               
+    else "/System/Library/Fonts/Andale Mono.ttf"  # Andale Mono
     if os.path.exists("/System/Library/Fonts/Andale Mono.ttf")
-    else "/System/Library/Fonts/Menlo.ttc"                     
+    else "/System/Library/Fonts/Menlo.ttc"  # Fallback to Menlo
 )
 
 FONT_PATH = "/System/Library/Fonts/Andale Mono.ttf"
@@ -95,12 +95,12 @@ except IOError:
         print("Using fallback font size and line height.")
 
 
-                                               
+# Apply color scheme based on background choice
 if USE_WHITE_BACKGROUND:
-                        
+    # Light theme colors
     BG_COLOR = (250, 250, 250)
     TEXT_COLOR = (30, 30, 30)
-    ADDED_LINE_BG_COLOR = (200, 255, 200, 180)                          
+    ADDED_LINE_BG_COLOR = (200, 255, 200, 180)  # Light green with alpha
     HISTORY_ADDED_LINE_BG_COLOR = (180, 240, 180, 160)
     HISTORY_PANE_BG_COLOR = (240, 240, 240)
     HISTORY_PANE_BORDER_COLOR = (180, 180, 180)
@@ -110,12 +110,12 @@ if USE_WHITE_BACKGROUND:
     MINI_DIFF_REMOVED_COLOR = (150, 0, 0)
     MINI_DIFF_CONTEXT_COLOR = (120, 120, 120)
     MINI_DIFF_ACTIVE_BORDER_COLOR = (180, 160, 0)
-    PYGMENTS_STYLE = "default"                             
+    PYGMENTS_STYLE = "default"  # Light syntax highlighting
 else:
-                                 
+    # Dark theme colors (default)
     BG_COLOR = (30, 30, 30)
     TEXT_COLOR = (220, 220, 220)
-    ADDED_LINE_BG_COLOR = (30, 70, 30, 200)                         
+    ADDED_LINE_BG_COLOR = (30, 70, 30, 200)  # Dark green with alpha
     HISTORY_ADDED_LINE_BG_COLOR = (25, 55, 25, 180)
     HISTORY_PANE_BG_COLOR = (38, 38, 38)
     HISTORY_PANE_BORDER_COLOR = (60, 60, 60)
@@ -125,27 +125,27 @@ else:
     MINI_DIFF_REMOVED_COLOR = (180, 0, 0)
     MINI_DIFF_CONTEXT_COLOR = (100, 100, 100)
     MINI_DIFF_ACTIVE_BORDER_COLOR = (220, 220, 0)
-    PYGMENTS_STYLE = "monokai"                            
+    PYGMENTS_STYLE = "monokai"  # Dark syntax highlighting
 
 style = get_style_by_name(PYGMENTS_STYLE)
 
-                                          
+# --- History Panes (like first video) ---
 SHOW_HISTORY_PANES = True
 NUM_HISTORY_PANES_TO_SHOW = 3
 HISTORY_PANE_Y_START = 94
 HISTORY_PANE_X_START_OFFSET_FROM_RIGHT = 5
 HISTORY_PANE_SPACING = 10
 HISTORY_FONT_SIZE = 8
-HISTORY_LABEL_FONT_SIZE = 30                                            
-TITLE_FONT_SIZE = 55                                          
+HISTORY_LABEL_FONT_SIZE = 30  # Match the main font size for consistency
+TITLE_FONT_SIZE = 55  # Font size for the main iteration title
 HISTORY_LINE_HEIGHT_RATIO = 1.2
 HISTORY_MAX_LINES_TO_DRAW = 1000
 MAIN_PANE_X_OFFSET = 20
-                                        
+# Align main pane top with history panes
 MAIN_PANE_Y_OFFSET = HISTORY_PANE_Y_START
 MAIN_PANE_RIGHT_MARGIN_IF_HISTORY = 5
 
-                                                                      
+# --- Mini-diff settings (fallback if SHOW_HISTORY_PANES is False) ---
 MINI_DIFF_PANE_WIDTH = 150
 MINI_DIFF_WIDTH = 12
 MINI_DIFF_HEIGHT_PER_LINE = 2
@@ -154,23 +154,23 @@ MINI_DIFF_MAX_LINES = 1000
 MINI_DIFF_TEXT_SIZE = 30
 
 
-                  
+# Animation timing
 CHARS_PER_SECOND = 150
 HOLD_DURATION_PER_ITERATION = (
-    1.0                                                          
+    1.0  # Increased duration since we're just holding each frame
 )
-                                                            
-SCROLL_SPEED_LINES_PER_SECOND = 40                              
-MIN_SCROLL_DURATION = 0.75                                       
-SCROLL_PAUSE_AT_TOP = 0.1                                 
-SCROLL_PAUSE_AT_BOTTOM = 1.5                                         
+# SCROLL_DURATION_PER_ITERATION = 1.5 # Will be made dynamic
+SCROLL_SPEED_LINES_PER_SECOND = 40  # Lines to scroll per second
+MIN_SCROLL_DURATION = 0.75  # Minimum time for a scroll animation
+SCROLL_PAUSE_AT_TOP = 0.1  # Pause at top before scrolling
+SCROLL_PAUSE_AT_BOTTOM = 1.5  # Pause at bottom before next iteration
 
-                                               
-HISTORY_TRANSITION_DURATION = 0.8                                              
-                                              
+# Smooth transition settings for history panels
+HISTORY_TRANSITION_DURATION = 0.8  # Duration for history panels to fade in/out
+# Duration for main pane to slide in from left
 MAIN_PANE_SLIDE_IN_DURATION = 0.6
 
-                          
+# --- Helper Functions ---
 
 
 def get_file_content(filepath):
@@ -191,7 +191,7 @@ def apply_patch(base_file_path, patch_file_path, target_dir):
     if not os.path.exists(temp_file_path) and os.path.exists(base_file_path):
         shutil.copy2(base_file_path, temp_file_path)
     elif not os.path.exists(temp_file_path) and not os.path.exists(base_file_path):
-        with open(temp_file_path, "w", encoding="utf-8") as f:                
+        with open(temp_file_path, "w", encoding="utf-8") as f:  # Ensure utf-8
             pass
 
     cmd = [
@@ -199,8 +199,8 @@ def apply_patch(base_file_path, patch_file_path, target_dir):
         "apply",
         "--ignore-whitespace",
         "--recount",
-    ]                                     
-                              
+    ]  # --recount helps with line numbers
+    # Simple p-level detection
     patch_preview_content = get_file_content(patch_file_path)
     if (
         f"--- a/{temp_file_name}" in patch_preview_content
@@ -225,7 +225,7 @@ def apply_patch(base_file_path, patch_file_path, target_dir):
         print("stdout:", e.stdout)
         print("stderr:", e.stderr)
         print("Attempting manual patch application (VERY basic)...")
-                                                                       
+        # Extremely simplified manual patch for additions/removals only
         current_content_lines = get_file_content(temp_file_path).splitlines(True)
         patch_content_lines = patch_preview_content.splitlines(True)
 
@@ -242,12 +242,12 @@ def apply_patch(base_file_path, patch_file_path, target_dir):
             if p_line.startswith("+"):
                 output_lines.append(p_line[1:])
             elif p_line.startswith("-"):
-                c_idx += 1                                      
-            else:           
+                c_idx += 1  # Skip corresponding line in current
+            else:  # Context
                 if c_idx < len(current_content_lines):
                     output_lines.append(current_content_lines[c_idx])
                 c_idx += 1
-        if c_idx < len(current_content_lines):                    
+        if c_idx < len(current_content_lines):  # Append remaining
             output_lines.extend(current_content_lines[c_idx:])
 
         with open(temp_file_path, "w", encoding="utf-8") as f:
@@ -278,7 +278,7 @@ def get_diff_details(old_code, new_code):
 
 def draw_mini_diff(
     patch_content, is_active=False, font_mini_diff=None
-):                     
+):  # For fallback mode
     img_height = MINI_DIFF_HEIGHT_PER_LINE * MINI_DIFF_MAX_LINES
     img_width = MINI_DIFF_WIDTH
 
@@ -318,15 +318,15 @@ def draw_mini_diff(
     return base_img
 
 
-                       
+# --- Prepare Fonts ---
 try:
     HISTORY_FONT = ImageFont.truetype(FONT_PATH, HISTORY_FONT_SIZE)
     HISTORY_LABEL_FONT = ImageFont.truetype(FONT_PATH, HISTORY_LABEL_FONT_SIZE)
     TITLE_FONT = ImageFont.truetype(FONT_PATH, TITLE_FONT_SIZE)
 except IOError:
-    HISTORY_FONT = FONT            
-    HISTORY_LABEL_FONT = FONT            
-    TITLE_FONT = FONT                           
+    HISTORY_FONT = FONT  # Fallback
+    HISTORY_LABEL_FONT = FONT  # Fallback
+    TITLE_FONT = FONT  # Fallback for title font
 HISTORY_LINE_HEIGHT = int(HISTORY_FONT_SIZE * HISTORY_LINE_HEIGHT_RATIO)
 
 try:
@@ -335,7 +335,7 @@ except IOError:
     MINI_DIFF_FONT = ImageFont.load_default()
 
 
-                        
+# --- Prepare States ---
 print("Preparing code states and diffs...")
 patch_files = sorted(glob.glob(os.path.join(PATCH_DIR, "*.patch")))
 if not patch_files:
@@ -348,7 +348,7 @@ if not os.path.exists(BASE_CODE_FILE):
         pass
 
 code_states = []
-raw_patch_contents_for_minidiff = []                                
+raw_patch_contents_for_minidiff = []  # Only for fallback mini-diffs
 
 base_content = get_file_content(BASE_CODE_FILE)
 code_states.append(
@@ -368,7 +368,7 @@ for i, patch_file in enumerate(patch_files):
     print(f"Processing patch {i + 1}/{len(patch_files)}: {patch_file}")
     patch_name = os.path.basename(patch_file)
 
-                                                                 
+    # Use custom label if provided, otherwise use patch file name
     if patch_labels and i < len(patch_labels):
         display_name = patch_labels[i]
     else:
@@ -385,13 +385,13 @@ for i, patch_file in enumerate(patch_files):
         }
     )
 
-                                                    
+    # Only load raw patches if needed for mini-diffs
     if not SHOW_HISTORY_PANES:
         raw_patch_contents_for_minidiff.append(get_file_content(patch_file))
 
     previous_content = current_content
 
-                                                                        
+# Pre-calculate mini_diff_images if that mode is selected (for fallback)
 mini_diff_images = []
 if not SHOW_HISTORY_PANES:
     for i, raw_patch_text in enumerate(raw_patch_contents_for_minidiff):
@@ -402,19 +402,19 @@ if not SHOW_HISTORY_PANES:
         )
 
 
-                          
+# Calculate total duration
 total_duration = 0
 for i, state in enumerate(code_states):
     lines_in_state = len(state["content"].splitlines())
     max_visible_lines = (VIDEO_HEIGHT - MAIN_PANE_Y_OFFSET - 50) // LINE_HEIGHT
 
-                                                                  
-                                                                    
+    # Early calculation of estimated main pane width for scrolling
+    # This is a rough estimate - the exact width is calculated later
     if SHOW_HISTORY_PANES and i > 0:
-                                                       
+        # Rough estimate when history panes are visible
         estimated_main_pane_width = int(VIDEO_WIDTH * 0.4)
     else:
-                                                  
+        # No history panes - use most of the width
         estimated_main_pane_width = VIDEO_WIDTH - MAIN_PANE_X_OFFSET * 2
 
     scroll_duration_for_state = 0
@@ -423,7 +423,7 @@ for i, state in enumerate(code_states):
         scroll_duration_for_state = max(
             MIN_SCROLL_DURATION, lines_to_scroll / SCROLL_SPEED_LINES_PER_SECOND
         )
-                                       
+        # Need scrolling for this state
         duration_for_this_state = (
             HOLD_DURATION_PER_ITERATION
             + scroll_duration_for_state
@@ -431,11 +431,11 @@ for i, state in enumerate(code_states):
             + SCROLL_PAUSE_AT_BOTTOM
         )
     else:
-                             
+        # No scrolling needed
         duration_for_this_state = HOLD_DURATION_PER_ITERATION
 
-                                                          
-    if i > 0:                                                         
+    # Add slide-in time for iterations after the first one
+    if i > 0:  # Only add slide-in time for iterations after the first
         duration_for_this_state += MAIN_PANE_SLIDE_IN_DURATION
     total_duration += duration_for_this_state
 
@@ -443,41 +443,41 @@ print(f"Total estimated duration: {total_duration:.2f}s")
 
 try:
     lexer = get_lexer_for_filename(BASE_CODE_FILE, stripall=False)
-except Exception:                     
+except Exception:  # Specify Exception
     try:
         lexer = guess_lexer(code_states[0]["content"] if code_states else "")
-    except Exception:                     
+    except Exception:  # Specify Exception
         from pygments.lexers.special import TextLexer
 
         lexer = TextLexer()
 print(f"Using Pygments lexer: {lexer.name}")
 
 
-                            
+# --- Animation Function ---
 def make_frame(t):
-                                                                        
+    # Calculate which code state to display based on time with scrolling
     current_time = 0
     state_index = 0
     scroll_offset = 0
     history_transition_alpha = (
-        1.0                                                                   
+        1.0  # Alpha for history panels (0.0 = invisible, 1.0 = fully visible)
     )
     main_pane_transition_progress = (
-        1.0                                                      
+        1.0  # 0.0 = no history layout, 1.0 = full history layout
     )
-    main_pane_slide_progress = 1.0                                              
+    main_pane_slide_progress = 1.0  # 0.0 = off-screen left, 1.0 = fully slid in
 
     for i, state in enumerate(code_states):
         lines_in_state = len(state["content"].splitlines())
         max_visible_lines = (VIDEO_HEIGHT - MAIN_PANE_Y_OFFSET - 50) // LINE_HEIGHT
 
-                                                                      
-                                                                        
+        # Early calculation of estimated main pane width for scrolling
+        # This is a rough estimate - the exact width is calculated later
         if SHOW_HISTORY_PANES and i > 0:
-                                                           
+            # Rough estimate when history panes are visible
             estimated_main_pane_width = int(VIDEO_WIDTH * 0.4)
         else:
-                                                      
+            # No history panes - use most of the width
             estimated_main_pane_width = VIDEO_WIDTH - MAIN_PANE_X_OFFSET * 2
 
         scroll_duration_for_state = 0
@@ -486,7 +486,7 @@ def make_frame(t):
             scroll_duration_for_state = max(
                 MIN_SCROLL_DURATION, lines_to_scroll / SCROLL_SPEED_LINES_PER_SECOND
             )
-                                        
+            # This state needs scrolling
             base_state_duration = (
                 HOLD_DURATION_PER_ITERATION
                 + scroll_duration_for_state
@@ -494,11 +494,11 @@ def make_frame(t):
                 + SCROLL_PAUSE_AT_BOTTOM
             )
         else:
-                                                
+            # No scrolling needed for this state
             base_state_duration = HOLD_DURATION_PER_ITERATION
 
-                                                              
-        if i > 0:                                                         
+        # Add slide-in time for iterations after the first one
+        if i > 0:  # Only add slide-in time for iterations after the first
             state_duration = base_state_duration + MAIN_PANE_SLIDE_IN_DURATION
         else:
             state_duration = base_state_duration
@@ -507,43 +507,43 @@ def make_frame(t):
             state_index = i
             time_in_state = t - current_time
 
-                                                                             
+            # Handle slide-in animation (only for iterations after the first)
             if i > 0 and time_in_state < MAIN_PANE_SLIDE_IN_DURATION:
-                                                       
+                # Main pane is sliding in from the left
                 main_pane_slide_progress = time_in_state / MAIN_PANE_SLIDE_IN_DURATION
-                                                                     
-                            
+                # During slide-in, don't scroll and stay at beginning
+                # of content
                 scroll_offset = 0
-                content_time_progress = 0                                     
+                content_time_progress = 0  # Don't start content scrolling yet
             else:
-                                                                          
+                # Slide-in is complete (or not needed for first iteration)
                 main_pane_slide_progress = 1.0
                 if i > 0:
                     content_time_progress = time_in_state - MAIN_PANE_SLIDE_IN_DURATION
                 else:
                     content_time_progress = time_in_state
 
-                                                             
-                                      
+            # Set history panel visibility based on iteration
+            # (no special transitions)
             if i == 0:
-                                                     
+                # First iteration - no history panels
                 history_transition_alpha = 0.0
                 main_pane_transition_progress = 0.0
             else:
-                                                                     
+                # All other iterations - history panels fully visible
                 history_transition_alpha = 1.0
                 main_pane_transition_progress = 1.0
 
-                                                                   
+            # Handle scrolling logic based on content time progress
             if lines_in_state > max_visible_lines and content_time_progress >= 0:
                 if content_time_progress < HOLD_DURATION_PER_ITERATION:
-                                         
+                    # Initial hold at top
                     scroll_offset = 0
                 elif (
                     content_time_progress
                     < HOLD_DURATION_PER_ITERATION + SCROLL_PAUSE_AT_TOP
                 ):
-                                                   
+                    # Pause at top before scrolling
                     scroll_offset = 0
                 elif (
                     content_time_progress
@@ -551,36 +551,36 @@ def make_frame(t):
                     + SCROLL_PAUSE_AT_TOP
                     + scroll_duration_for_state
                 ):
-                                     
+                    # Scrolling phase
                     scroll_progress = (
                         content_time_progress
                         - HOLD_DURATION_PER_ITERATION
                         - SCROLL_PAUSE_AT_TOP
                     ) / scroll_duration_for_state
 
-                                                                                           
-                                                                                             
+                    # Calculate accurate max scroll by working backwards from the last line
+                    # to find how many lines fit in the viewport when accounting for wrapping
                     state_lines = state["content"].splitlines()
                     available_height = VIDEO_HEIGHT - MAIN_PANE_Y_OFFSET - 50
                     max_width = estimated_main_pane_width - 20
 
-                                                                                         
+                    # Work backwards from the last line to find the optimal scroll offset
                     current_height = 0
                     optimal_scroll_offset = len(state_lines)
 
                     for line_idx in range(len(state_lines) - 1, -1, -1):
                         line_text = state_lines[line_idx].rstrip("\r\n")
 
-                                                                                
+                        # Estimate line height considering wrapping (simplified)
                         if not line_text:
                             line_height = LINE_HEIGHT
                         else:
-                                                       
+                            # Quick wrapping estimation
                             line_width = len(line_text) * (
                                 FONT_SIZE * 0.6
-                            )                  
+                            )  # Rough estimate
                             if line_width > max_width:
-                                                                                            
+                                # Estimate how many visual lines this logical line will take
                                 estimated_wrap_lines = max(
                                     1, int(line_width / max_width) + 1
                                 )
@@ -596,7 +596,7 @@ def make_frame(t):
                     optimal_scroll_offset = max(0, optimal_scroll_offset)
                     scroll_offset = int(scroll_progress * optimal_scroll_offset)
                 else:
-                                                                         
+                    # Pause at bottom - use the calculated optimal offset
                     state_lines = state["content"].splitlines()
                     available_height = VIDEO_HEIGHT - MAIN_PANE_Y_OFFSET - 50
                     max_width = estimated_main_pane_width - 20
@@ -635,18 +635,18 @@ def make_frame(t):
 
     current_state_data = code_states[state_index]
     code_to_display_full = current_state_data["content"]
-    code_to_display_typed = code_to_display_full                            
+    code_to_display_typed = code_to_display_full  # Always show full content
     added_lines_for_this_main_state = current_state_data["added_lines"]
-    iter_idx = state_index                                       
+    iter_idx = state_index  # For compatibility with rest of code
 
     img = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), BG_COLOR)
     draw = ImageDraw.Draw(img, "RGBA")
 
-                                                               
+    # --- Calculate Pane Dimensions with Smooth Transitions ---
     actual_num_history_panes_to_render = 0
     history_pane_individual_width = 0
 
-                                                                       
+    # Calculate dimensions for both no-history and with-history layouts
     main_code_pane_width_no_history = VIDEO_WIDTH - MAIN_PANE_X_OFFSET * 2
     main_pane_x_offset_no_history = MAIN_PANE_X_OFFSET
 
@@ -657,15 +657,15 @@ def make_frame(t):
     if SHOW_HISTORY_PANES and iter_idx > 0:
         actual_num_history_panes_to_render = min(NUM_HISTORY_PANES_TO_SHOW, iter_idx)
 
-                                                 
+        # Calculate width for history panes first
         total_history_spacing = (
             (actual_num_history_panes_to_render - 1) * HISTORY_PANE_SPACING
             if actual_num_history_panes_to_render > 0
             else 0
         )
-                                                                
-                                         
-                                                                       
+        # Let's try to give history panes a fixed relative width
+        # or a portion of remaining space
+        # Example: allocate ~40% of width to all history panes together
         total_width_for_all_history_panes = (
             int(VIDEO_WIDTH * 0.6) - HISTORY_PANE_X_START_OFFSET_FROM_RIGHT
         )
@@ -677,7 +677,7 @@ def make_frame(t):
             )
             history_pane_individual_width = max(
                 100, history_pane_individual_width
-            )             
+            )  # Min width
 
             main_code_pane_width_with_history = VIDEO_WIDTH - (
                 total_width_for_all_history_panes
@@ -687,19 +687,19 @@ def make_frame(t):
             )
             main_code_pane_width_with_history = max(
                 int(VIDEO_WIDTH * 0.35), main_code_pane_width_with_history
-            )                                          
+            )  # Ensure main pane has some decent width
     elif not SHOW_HISTORY_PANES:
         main_code_pane_width_no_history = (
             VIDEO_WIDTH - MAIN_PANE_X_OFFSET - MINI_DIFF_PANE_WIDTH - 10
-        )                       
+        )  # Space for minidiffs
 
-                                                             
+    # Interpolate between no-history and with-history layouts
     main_code_pane_width = int(
         main_code_pane_width_no_history * (1 - main_pane_transition_progress)
         + main_code_pane_width_with_history * main_pane_transition_progress
     )
 
-                                                
+    # Calculate the centered position if enabled
     if CENTER_CONTENT:
         content_total_width_no_history = main_code_pane_width_no_history
         content_total_width_with_history = main_code_pane_width_with_history
@@ -717,25 +717,25 @@ def make_frame(t):
             MAIN_PANE_X_OFFSET, (VIDEO_WIDTH - content_total_width_with_history) // 2
         )
 
-                                                            
+    # Interpolate main pane position based on history layout
     main_pane_x_offset_final = int(
         main_pane_x_offset_no_history * (1 - main_pane_transition_progress)
         + main_pane_x_offset_with_history * main_pane_transition_progress
     )
 
-                                                           
-    slide_in_start_x = -main_code_pane_width                                           
+    # Apply slide-in animation - start from off-screen left
+    slide_in_start_x = -main_code_pane_width  # Start completely off-screen to the left
     main_pane_x_offset = int(
         slide_in_start_x * (1 - main_pane_slide_progress)
         + main_pane_x_offset_final * main_pane_slide_progress
     )
 
-                                                      
+    # Draw iteration title at the top of the main pane
     iter_text_content = f"{current_state_data['patch_name']}"
-    title_margin_top = 67                                       
-    title_padding = 12                                   
+    title_margin_top = 67  # Adjusted for larger TITLE_FONT_SIZE
+    title_padding = 12  # Match the history label padding
 
-                                       
+    # Measure text to create background
     iter_text_w = (
         TITLE_FONT.getlength(iter_text_content)
         if hasattr(TITLE_FONT, "getlength")
@@ -746,14 +746,14 @@ def make_frame(t):
         else 400
     )
 
-                                         
+    # Calculate center position for title
     title_center_x = main_pane_x_offset + (main_code_pane_width // 2)
     title_x_start = title_center_x - (iter_text_w // 2) - title_padding
     title_x_end = title_center_x + (iter_text_w // 2) + title_padding
     title_text_x = title_center_x - (iter_text_w // 2)
 
-                                                     
-                                                                       
+    # Draw background with same style as patch labels
+    # Ensure title_bg_color assignment is on multiple lines if too long
     title_bg_color = (60, 60, 60) if not USE_WHITE_BACKGROUND else (220, 220, 220)
 
     title_box_y1 = MAIN_PANE_Y_OFFSET - title_margin_top - title_padding
@@ -771,7 +771,7 @@ def make_frame(t):
         fill=title_bg_color,
     )
 
-               
+    # Draw text
     draw.text(
         (title_text_x, MAIN_PANE_Y_OFFSET - title_margin_top),
         iter_text_content,
@@ -779,19 +779,19 @@ def make_frame(t):
         fill=TEXT_COLOR,
     )
 
-                                                  
+    # 1. Draw Main Code Pane (Left) with scrolling
     y_offset = MAIN_PANE_Y_OFFSET
     main_lines = code_to_display_typed.splitlines(True)
 
-                                                       
+    # Calculate dynamic height based on number of lines
     total_code_lines = len(main_lines)
     max_displayable_lines = min(
         total_code_lines, (VIDEO_HEIGHT - MAIN_PANE_Y_OFFSET - 50) // LINE_HEIGHT
     )
-                      
+    # Add some padding
     main_pane_height = max_displayable_lines * LINE_HEIGHT + 20
 
-                            
+    # Apply scrolling offset
     start_line = scroll_offset
     end_line = min(start_line + max_displayable_lines, total_code_lines)
 
@@ -804,7 +804,7 @@ def make_frame(t):
         line_text_orig = main_lines[line_idx]
         line_text = line_text_orig.rstrip("\r\n")
 
-                                               
+        # Wrap long lines instead of truncating
         max_width = main_code_pane_width - 20
         line_width = (
             FONT.getlength(line_text)
@@ -817,7 +817,7 @@ def make_frame(t):
         )
 
         if line_width > max_width:
-                                                       
+            # Calculate approximate characters per line
             avg_char_w = (
                 FONT.getlength("M")
                 if hasattr(FONT, "getlength")
@@ -831,7 +831,7 @@ def make_frame(t):
                 int(max_width / avg_char_w) if avg_char_w > 0 else int(max_width / 8)
             )
 
-                                       
+            # Split into multiple lines
             lines_to_draw = []
             remaining = line_text
 
@@ -840,10 +840,10 @@ def make_frame(t):
                     lines_to_draw.append(remaining)
                     break
 
-                                                     
+                # Try to break at a space if possible
                 split_pos = chars_per_line
                 if " " in remaining[:chars_per_line]:
-                                                              
+                    # Find the last space in the allowed width
                     last_space = remaining[:chars_per_line].rstrip().rfind(" ")
                     if last_space > 0:
                         split_pos = last_space + 1
@@ -851,10 +851,10 @@ def make_frame(t):
                 lines_to_draw.append(remaining[:split_pos])
                 remaining = remaining[split_pos:]
 
-                                
+            # Draw wrapped lines
             first_line = True
             for wrapped_line in lines_to_draw:
-                                                                              
+                # Draw background for added lines on each wrapped line segment
                 if line_idx in added_lines_for_this_main_state:
                     draw.rectangle(
                         (
@@ -868,7 +868,7 @@ def make_frame(t):
 
                 line_x_cursor = main_pane_x_offset
                 if not first_line:
-                                                       
+                    # Add indentation for wrapped lines
                     line_x_cursor += 20
 
                 try:
@@ -905,7 +905,7 @@ def make_frame(t):
                         )
                         line_x_cursor += token_width
                 except Exception:
-                                                                               
+                    # Fallback to drawing the entire line with spaces preserved
                     draw.text(
                         (
                             main_pane_x_offset
@@ -921,12 +921,12 @@ def make_frame(t):
                 y_offset += LINE_HEIGHT
                 first_line = False
 
-                                                                   
+                # Stop if we've reached the bottom of the main pane
                 if y_offset + LINE_HEIGHT > MAIN_PANE_Y_OFFSET + main_pane_height:
                     break
         else:
-                                                        
-                                             
+            # Single line rendering (no wrapping needed)
+            # Draw background for added lines
             if line_idx in added_lines_for_this_main_state:
                 draw.rectangle(
                     (
@@ -970,7 +970,7 @@ def make_frame(t):
                     )
                     line_x_cursor += token_width
             except Exception:
-                                                                           
+                # Fallback to drawing the entire line with spaces preserved
                 draw.text(
                     (main_pane_x_offset, y_offset),
                     line_text,
@@ -979,17 +979,17 @@ def make_frame(t):
                 )
             y_offset += LINE_HEIGHT
 
-                                                           
+    # 2. Draw History Panes (Right) with smooth transitions
     if (
         SHOW_HISTORY_PANES
         and actual_num_history_panes_to_render > 0
         and history_transition_alpha > 0
     ):
-                                                                           
+        # Create a separate image for history panes to apply alpha blending
         history_img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (0, 0, 0, 0))
         history_draw = ImageDraw.Draw(history_img, "RGBA")
 
-                                                    
+        # Position history panes after the main pane
         current_history_pane_x_start_coord = (
             main_pane_x_offset
             + main_code_pane_width
@@ -997,24 +997,24 @@ def make_frame(t):
         )
 
         for i in range(actual_num_history_panes_to_render):
-                                                                       
+            # Display panes from left to right: most recent edits first
             history_iter_index_to_display = iter_idx - 1 - i
 
             state_to_draw = code_states[history_iter_index_to_display]
             history_code_content = state_to_draw["content"]
             added_lines_in_this_history_version = state_to_draw["added_lines"]
 
-                                                                                 
+            # Calculate dynamic height for this history pane based on its content
             hist_lines = history_code_content.splitlines()
             max_hist_lines = min(len(hist_lines), HISTORY_MAX_LINES_TO_DRAW)
             history_pane_height = (
                 max_hist_lines * HISTORY_LINE_HEIGHT + 30
-            )               
+            )  # Add padding
 
             pane_x1 = current_history_pane_x_start_coord
             pane_y1 = HISTORY_PANE_Y_START
             pane_x2 = current_history_pane_x_start_coord + history_pane_individual_width
-            pane_y2 = pane_y1 + history_pane_height                         
+            pane_y2 = pane_y1 + history_pane_height  # Use calculated height
 
             history_draw.rectangle(
                 (pane_x1, pane_y1, pane_x2, pane_y2), fill=HISTORY_PANE_BG_COLOR
@@ -1039,7 +1039,7 @@ def make_frame(t):
                 drawable_hist_line = hist_line_text
                 max_text_width_in_pane = history_pane_individual_width - 10
 
-                                              
+                # Check if line needs wrapping
                 current_line_width_px = (
                     HISTORY_FONT.getlength(drawable_hist_line)
                     if hasattr(HISTORY_FONT, "getlength")
@@ -1050,9 +1050,9 @@ def make_frame(t):
                     else len(drawable_hist_line) * HISTORY_FONT_SIZE
                 )
 
-                                                                     
+                # If line is too long, wrap it rather than truncating
                 if current_line_width_px > max_text_width_in_pane:
-                                                                              
+                    # Calculate approximately how many characters fit per line
                     avg_char_w = (
                         HISTORY_FONT.getlength("M")
                         if hasattr(HISTORY_FONT, "getlength")
@@ -1068,7 +1068,7 @@ def make_frame(t):
                         else int(max_text_width_in_pane / HISTORY_FONT_SIZE)
                     )
 
-                                               
+                    # Split into multiple lines
                     wrapped_lines = []
                     remaining = drawable_hist_line
 
@@ -1079,10 +1079,10 @@ def make_frame(t):
                             wrapped_lines.append(remaining)
                             break
 
-                                                             
+                        # Try to break at a space if possible
                         split_pos = chars_per_line
                         if " " in remaining[:chars_per_line]:
-                                                                      
+                            # Find the last space in the allowed width
                             last_space = remaining[:chars_per_line].rstrip().rfind(" ")
                             if last_space > 0:
                                 split_pos = last_space + 1
@@ -1090,10 +1090,10 @@ def make_frame(t):
                         wrapped_lines.append(remaining[:split_pos])
                         remaining = remaining[split_pos:]
 
-                                        
+                    # Draw wrapped lines
                     for wrapped_line in wrapped_lines:
-                                                                              
-                                 
+                        # Draw background for added lines on each wrapped line
+                        # segment
                         if line_num_in_hist in added_lines_in_this_history_version:
                             history_draw.rectangle(
                                 (
@@ -1148,12 +1148,12 @@ def make_frame(t):
                             )
                         hist_text_y += HISTORY_LINE_HEIGHT
 
-                                                                      
+                        # Stop if we've reached the bottom of the pane
                         if hist_text_y + HISTORY_LINE_HEIGHT > pane_y2 - 5:
                             break
                 else:
-                                                    
-                                                     
+                    # Draw single line since it fits
+                    # Draw background for added lines
                     if line_num_in_hist in added_lines_in_this_history_version:
                         history_draw.rectangle(
                             (
@@ -1210,8 +1210,8 @@ def make_frame(t):
                     hist_text_y += HISTORY_LINE_HEIGHT
 
             history_pane_label = f"{state_to_draw['patch_name']}"
-                                                       
-                                             
+            # if len(state_to_draw["patch_name"]) > 33:
+            #     history_pane_label += "..."
             label_w = (
                 HISTORY_LABEL_FONT.getlength(history_pane_label)
                 if hasattr(HISTORY_LABEL_FONT, "getlength")
@@ -1224,12 +1224,12 @@ def make_frame(t):
             label_x = pane_x1 + (history_pane_individual_width - label_w) // 2
             label_y = (
                 pane_y1 - HISTORY_LABEL_FONT_SIZE - 40
-            )                                                        
+            )  # Position much higher above the pane to avoid overlap
             if label_y < 5:
-                label_y = 5                       
+                label_y = 5  # Ensure it's visible
 
-                                                              
-                                          
+            # Draw background rectangle for history pane label
+            # (similar to iteration title)
             label_padding = 2
             label_bg_color = (
                 (60, 60, 60) if not USE_WHITE_BACKGROUND else (220, 220, 220)
@@ -1244,7 +1244,7 @@ def make_frame(t):
                 fill=label_bg_color,
             )
 
-                             
+            # Draw label text
             history_draw.text(
                 (label_x, label_y),
                 history_pane_label,
@@ -1256,23 +1256,23 @@ def make_frame(t):
                 history_pane_individual_width + HISTORY_PANE_SPACING
             )
 
-                                                    
+        # Apply alpha blending for smooth transition
         if history_transition_alpha < 1.0:
-                                                     
+            # Apply alpha to the entire history image
             history_img = history_img.convert("RGBA")
             alpha = int(255 * history_transition_alpha)
-                                                                  
+            # Create an alpha channel based on transition progress
             history_alpha = Image.new("L", history_img.size, alpha)
             history_img.putalpha(history_alpha)
 
-                                                         
+        # Composite the history image onto the main image
         img = img.convert("RGBA")
         img = Image.alpha_composite(img, history_img)
         img = img.convert("RGB")
 
-    elif not SHOW_HISTORY_PANES:                                   
+    elif not SHOW_HISTORY_PANES:  # Fallback to original mini-diffs
         mini_diff_x_start = VIDEO_WIDTH - MINI_DIFF_PANE_WIDTH + 15
-        mini_diff_y_start = MAIN_PANE_Y_OFFSET                               
+        mini_diff_y_start = MAIN_PANE_Y_OFFSET  # Align with top of main code
         current_patch_display_idx = iter_idx - 1
 
         for i in range(len(mini_diff_images)):
@@ -1290,7 +1290,7 @@ def make_frame(t):
 
             if (
                 is_this_one_active
-            ):                                                                      
+            ):  # Redraw with border if active (original mini_diff was pre-rendered)
                 md_img_to_paste = draw_mini_diff(
                     raw_patch_contents_for_minidiff[i],
                     is_active=True,
@@ -1315,10 +1315,10 @@ def make_frame(t):
             text_x_md = (
                 mini_diff_x_start + (md_img_to_paste.width // 2) - (text_w_md // 2)
             )
-                          
+            # Moved higher
             text_y_md = mini_diff_y_start + md_img_to_paste.height - 2
             if text_y_md + MINI_DIFF_TEXT_SIZE < VIDEO_HEIGHT - 10:
-                                                               
+                # Draw background rectangle for mini-diff label
                 label_padding = 4
                 label_bg_color = (
                     (60, 60, 60) if not USE_WHITE_BACKGROUND else (220, 220, 220)
@@ -1333,7 +1333,7 @@ def make_frame(t):
                     fill=label_bg_color,
                 )
 
-                                                
+                # Draw text on top of background
                 draw.text(
                     (text_x_md, text_y_md),
                     patch_label,
@@ -1347,7 +1347,7 @@ def make_frame(t):
     return np.array(img)
 
 
-                      
+# --- Create Video ---
 print("Creating video clip...")
 animation = VideoClip(make_frame, duration=total_duration)
 
@@ -1373,12 +1373,12 @@ except Exception as e:
         print("Video writing failed with both codecs.")
 
 
-                 
+# --- Cleanup ---
 print("Cleaning up temporary directory...")
 shutil.rmtree(temp_dir)
 if os.path.exists(BASE_CODE_FILE) and get_file_content(BASE_CODE_FILE) == "":
     if "your_base_code_file.py" in BASE_CODE_FILE:
         print(f"Removing placeholder empty base file: {BASE_CODE_FILE}")
-                                                                        
+        # os.remove(BASE_CODE_FILE) # Comment out if you want to keep it
 
 print("Done!")

@@ -29,12 +29,12 @@ Spec constraints
 ================================================================================
 """
 
-                                                                               
-                          
-                                                                               
+# =============================================================================
+# Standard library imports
+# =============================================================================
 import argparse
 import asyncio
-import importlib.util                                                 
+import importlib.util  # dynamic loading for candidate program modules
 import json
 import math
 import os
@@ -45,15 +45,15 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests                                   
+import requests  # HTTP client for Lean Server API
 
-                                                                            
-                                       
- 
-               
-                                                                                 
-                                            
-                              
+# Reuse the paper-aligned cycle-consistency implementation directly to avoid
+# duplicating logic across directories.
+#
+# Search order:
+# 1. Local: examples/autoformalization_v1/autoformalization-cycle-consistency/src
+# 2. Environment variable: CYCLE_CC_SRC_PATH
+# 3. None (gracefully degrade)
 _LOCAL_CYCLE_CC_SRC = Path(__file__).parent / "autoformalization-cycle-consistency" / "src"
 _ENV_CYCLE_CC_SRC = Path(os.environ.get("CYCLE_CC_SRC_PATH", "")) if os.environ.get("CYCLE_CC_SRC_PATH") else None
 _CYCLE_CC_SRC = (
@@ -65,19 +65,19 @@ _CYCLE_CC_SRC = (
 if _CYCLE_CC_SRC and _CYCLE_CC_SRC.exists():
     sys.path.insert(0, str(_CYCLE_CC_SRC))
 try:
-    from model_interface import OpenAICompatibleLLM                
+    from model_interface import OpenAICompatibleLLM  # type: ignore
 except Exception:
-    OpenAICompatibleLLM = None                
-                                                                               
-                                                     
-                                                                               
-                                                                                         
+    OpenAICompatibleLLM = None  # type: ignore
+# =============================================================================
+# Environment init (must happen before other imports)
+# =============================================================================
+# Load .env first because subsequent API calls rely on env vars like OPENAI_API_KEY, etc.
 from dotenv import load_dotenv
 env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 
-                                                                              
-                                                                                          
+# Configure Lean cache directories (`lean_interact` writes lock/tmp projects).
+# In sandboxed environments, the home directory may be read-only, so pick a writable path.
 PROJECT_CACHE_DIR = Path(__file__).parent / ".lean_interact_cache"
 TMP_CACHE_DIR = Path("/tmp/lean_interact_cache_autoformal")
 MATHLIB_CACHE = Path(os.environ.get("MATHLIB_CACHE_DIR", "~/.cache/mathlib")).expanduser()
@@ -108,7 +108,7 @@ def _pick_writable_cache_dir() -> Path:
 cache_dir = _pick_writable_cache_dir()
 os.environ["LEAN_INTERACT_CACHE_DIR"] = str(cache_dir)
 
-                                            
+# Override lean_interact default cache path.
 try:
     import lean_interact.utils as li_utils
     import lean_interact.project as li_project
@@ -120,39 +120,39 @@ try:
 except Exception:
     pass
 
-                                                                                
-                                                                                       
-                      
+# Add project root to sys.path so subprocess execution can import local modules.
+# `evaluate.py` is invoked as a standalone subprocess, so its working directory may not
+# be the project root.
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-                                                                         
-                                                                         
+# Optional: allow local BEq+ checkout without hard-coding personal paths.
+# If unset, BEq+ is simply disabled unless installed as a Python package.
 BEQ_PLUS_PATH = os.environ.get("BEQ_PLUS_PATH", "").strip()
 if BEQ_PLUS_PATH:
     sys.path.insert(0, BEQ_PLUS_PATH)
 
-                                                                               
-                      
-                                                                               
-                                                                   
-                                                                                                       
+# =============================================================================
+# ShinkaEvolve imports
+# =============================================================================
+# run_shinka_eval: the standard ShinkaEvolve evaluation entrypoint.
+# It: (1) loads the candidate program (2) executes it (3) collects outputs (4) calls aggregate_metrics.
 from shinka.core import run_shinka_eval
 from shinka.core.wrap_eval import save_json_results
 
-                                                                               
-                           
-                                                                               
-                                                
-                                                           
-                                                         
+# =============================================================================
+# Autoformalization imports
+# =============================================================================
+# Reused modules providing Lean 4 functionality:
+# - lean_env: Lean 4 compilation server (via lean-interact)
+# - critic_wrapper: CriticLean semantic judge (LLM-based)
 from autoformalization.lean_env import get_lean_server, is_lean_server_available
 from autoformalization.models import Candidate, Problem
 from autoformalization.critic_wrapper import critic_eval, close_session
 
 
-                                                                               
-                
-                                                                               
+# =============================================================================
+# Config loading
+# =============================================================================
 
 _CONFIG_CONTEXT_RESULTS_DIR: Optional[str] = None
 
@@ -200,7 +200,7 @@ def _find_problem_config_path(results_dir: Optional[str] = None) -> Optional[Pat
     anchor = results_dir or _CONFIG_CONTEXT_RESULTS_DIR
     if anchor:
         start = Path(anchor)
-        if start.suffix:             
+        if start.suffix:  # file path
             start = start.parent
         for parent in (start, *start.parents):
             cand = parent / "problem_config.json"
@@ -228,7 +228,7 @@ def get_config(results_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     config_path = _find_problem_config_path(results_dir)
 
-                                                                           
+    # Prefer loading from config file (supports per-results_dir isolation).
     if config_path and config_path.exists():
         with open(config_path) as f:
             config = json.load(f)
@@ -238,12 +238,12 @@ def get_config(results_dir: Optional[str] = None) -> Dict[str, Any]:
             "ground_truth": config.get("ground_truth", ""),
             "use_beq": config.get("use_beq", False),
             "no_llm": bool(config.get("no_llm", False)),
-                                                                
+            # Semantic check is noisy and optional; default off.
             "use_semantic": config.get("use_semantic", False),
-                                                                                         
+            # Cycle-consistency score (continuous) as an alternative signal; default off.
             "use_cycle_consistency": config.get("use_cycle_consistency", False),
             "compile_timeout": config.get("compile_timeout", 600),
-                                                                                               
+            # Scoring weights (must be auditable via problem_config.json; explicit 0 is valid).
             "score_base": config.get(
                 "score_base",
                 float(os.environ.get("AUTOFORMAL_SCORE_BASE", "100")),
@@ -260,7 +260,7 @@ def get_config(results_dir: Optional[str] = None) -> Dict[str, Any]:
                 "score_beq_bonus",
                 float(os.environ.get("AUTOFORMAL_SCORE_BEQ_BONUS", "200")),
             ),
-                                                                                
+            # Paper-aligned cycle-consistency config (log-prob via /completions)
             "cycle_api_base_url": config.get(
                 "cycle_api_base_url",
                 os.environ.get("CYCLE_API_BASE_URL", "http://127.0.0.1:8090/v1"),
@@ -276,7 +276,7 @@ def get_config(results_dir: Optional[str] = None) -> Dict[str, Any]:
                     "Informalize: {formal_statement}",
                 ),
             ),
-                                                                               
+            # Reduce metric variance from semantically irrelevant naming noise.
             "cycle_normalize_decl_name": bool(
                 config.get(
                     "cycle_normalize_decl_name",
@@ -344,7 +344,7 @@ def get_config(results_dir: Optional[str] = None) -> Dict[str, Any]:
             ),
         })
 
-                                   
+    # Fallback: load from env vars.
     return _apply_semantic_overrides({
         "informal": os.environ.get("AUTOFORMAL_INFORMAL", ""),
         "header": os.environ.get(
@@ -422,13 +422,13 @@ def cycle_consistency_score(
         meta["cycle_log_prob"] = None
         meta["cycle_num_tokens"] = 0
         meta["cycle_normalized_log_prob"] = float(fallback_nlp)
-                                    
+        # exp(negative / T) in (0,1]
         score = math.exp(float(fallback_nlp) / t) if math.isfinite(float(fallback_nlp)) else 0.0
         meta["cycle_score_raw"] = float(score)
         return float(score), meta
 
     a = (target_informal or "").strip()
-                                                                           
+    # Global no-LLM mode: never touch network; return a deterministic stub.
     if cfg.get("no_llm", False) or os.environ.get("AUTOFORMAL_NO_LLM", "").lower() in {"1", "true", "yes"}:
         meta["cycle_prompt_preview"] = ""
         return _stub("stub_no_llm", "no_llm=1")
@@ -453,7 +453,7 @@ def cycle_consistency_score(
     else:
         meta["cycle_normalize_decl_name"] = False
 
-                                                                          
+    # Strip the leading `theorem` keyword as required by the new protocol.
     formal_for_prompt = strip_theorem_keyword_for_cycle_prompt(formal_for_prompt)
     meta["cycle_strip_theorem_keyword"] = True
     meta["cycle_strip_decl_name"] = True
@@ -489,15 +489,15 @@ def cycle_consistency_score(
     if not math.isfinite(nlp):
         return _stub("stub_cycle_non_finite", "cycle_normalized_log_prob not finite")
 
-                                
+    # exp(negative / T) in (0,1]
     score = math.exp(nlp / t)
     meta["cycle_score_raw"] = score
     return float(score), meta
 
 
-                                                                               
-                                                    
-                                                                               
+# =============================================================================
+# Compile error type extraction (for repair prompts)
+# =============================================================================
 
 def extract_compile_error_type(error_msg: str) -> str:
     """
@@ -530,7 +530,7 @@ def extract_compile_error_type(error_msg: str) -> str:
 
     error_lower = error_msg.lower()
 
-                                                            
+    # Lean 4 error patterns (roughly in order of frequency).
     if "type mismatch" in error_lower:
         return "type_mismatch"
     elif "unknown identifier" in error_lower or "unknown constant" in error_lower:
@@ -643,19 +643,19 @@ def extract_first_declaration(text: str) -> str:
     )
     keyword_pattern_thm = re.compile(r"^\s*(?:noncomputable\s+)?(?:theorem|lemma)\b")
     decl_idx = None
-                                      
+    # Prefer theorem/lemma if present.
     for i, line in enumerate(lines):
         if keyword_pattern_thm.search(line):
             decl_idx = i
             break
-                                                        
+    # Fallback: first top-level declaration of any kind.
     if decl_idx is None:
         for i, line in enumerate(lines):
             if keyword_pattern_any.search(line):
                 decl_idx = i
                 break
     if decl_idx is None:
-        return ""                                                          
+        return ""  # Fix: return empty string when no declaration is found.
     start = decl_idx
     while start > 0 and lines[start - 1].lstrip().startswith("@["):
         start -= 1
@@ -676,7 +676,7 @@ def normalize_lean_statement(text: str) -> str:
     if not text:
         return ""
 
-                                                                                           
+    # Fix: filter common placeholders (models sometimes emit these as "no result" markers).
     INVALID_PLACEHOLDERS = {"none", "null", "nil", "n/a", "na", ""}
     text_lower = text.strip().lower()
     if text_lower in INVALID_PLACEHOLDERS:
@@ -687,7 +687,7 @@ def normalize_lean_statement(text: str) -> str:
     cleaned = strip_evolve_markers(cleaned)
     result = extract_first_declaration(cleaned)
 
-                                                             
+    # Fix: re-check the extracted statement for placeholders.
     if result and result.strip().lower() in INVALID_PLACEHOLDERS:
         return ""
 
@@ -707,12 +707,12 @@ def normalize_lean_code(text: str) -> str:
     raw = str(text)
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
-                                              
+    # Prefer ```lean / ```lean4 fenced blocks.
     m = re.search(r"```(?:lean4?|lean)\s*\n(.*?)```", raw, re.DOTALL)
     if m:
         raw = m.group(1)
     else:
-                                     
+        # Fallback: any fenced block.
         m2 = re.search(r"```\s*\n(.*?)```", raw, re.DOTALL)
         if m2:
             raw = m2.group(1)
@@ -745,22 +745,22 @@ def extract_lean_preamble(code: str) -> str:
         preamble_lines.append(line)
     return "\n".join(preamble_lines).strip()
 
-                                                                               
-                                        
-                                                                               
- 
-                                                                                     
-                                                                               
-                                                                     
- 
-                                                                       
-                                                                              
-         
- 
-            
-                                                                          
-                                                                       
- 
+# =============================================================================
+# Cycle-consistency prompt normalization
+# =============================================================================
+#
+# Cycle-consistency scoring uses log P(informal | "Informalize: {formal_statement}").
+# In practice, this can be sensitive to *semantically irrelevant naming noise*,
+# especially the top-level declaration name (theorem/lemma/def name).
+#
+# To reduce this variance (and make comparisons across runs fairer), we
+# normalize the first top-level declaration name before constructing the cycle
+# prompt.
+#
+# IMPORTANT:
+# - This ONLY affects cycle_score / cycle_normalized_log_prob computation.
+# - It does NOT change compilation checks or the stored candidate code.
+#
 
 _CYCLE_CANONICAL_DECL_NAME = "my_theorem"
 
@@ -782,10 +782,10 @@ def normalize_decl_name_for_cycle_prompt(
     if not stmt:
         return stmt, None
 
-                                                       
-     
-                                                                    
-                                                                          
+    # Replace only the first matching declaration name.
+    #
+    # We intentionally limit to common named top-level declarations.
+    # Anonymous `example : ...` forms do not match and are left unchanged.
     name_pat = re.compile(
         r"(?m)^(\s*(?:noncomputable\s+)?(?:theorem|lemma|def|instance|axiom|abbrev|opaque)\s+)([^\s:(]+)"
     )
@@ -814,25 +814,25 @@ def strip_theorem_keyword_for_cycle_prompt(formal_statement: str) -> str:
     if not s:
         return ""
 
-                                                                                   
+    # Drop leading attribute lines (e.g. @[simp]) to ensure we match the decl line.
     s = re.sub(r"(?m)^\s*@\[.*\]\s*\n?", "", s).strip()
 
-                                                             
+    # Remove the first occurrence of the declaration keyword.
     s2 = re.sub(r"(?m)^\s*(?:noncomputable\s+)?theorem\s+", "", s, count=1).strip()
 
-                                        
-              
-                                              
-                                   
+    # Remove the declaration name token.
+    # Example:
+    #   "my_theorem (x : ℝ) : P x := by sorry"
+    # → "(x : ℝ) : P x := by sorry"
     m_name = re.match(r"^\s*([^\s:(]+)\s*(.*)\Z", s2, flags=re.DOTALL)
     if not m_name:
         return s2.strip()
     return (m_name.group(2) or "").strip()
 
 
-                                                                               
-                        
-                                                                               
+# =============================================================================
+# Lean compilation check
+# =============================================================================
 
 def check_lean_compile(
     code: str,
@@ -850,12 +850,12 @@ def check_lean_compile(
     - (True, "") on success
     - (False, error_msg) on failure
     """
-                                                                             
-                                                                          
-     
-            
-                                                                                                
-                                                                              
+    # This project primarily relies on local compilation via `lean_interact`.
+    # An HTTP Lean server may exist in some environments, but is optional.
+    #
+    # Rules:
+    # - If `lean_server_url` (or env `LEAN_SERVER_URL`) starts with http(s):// → try HTTP first.
+    # - Otherwise (unset / "local" / etc.) → use local lean_interact directly.
     raw_server_url = (lean_server_url or os.environ.get("LEAN_SERVER_URL", "")).strip()
     use_http = raw_server_url.startswith("http://") or raw_server_url.startswith("https://")
     LEAN_SERVER_URL = raw_server_url if use_http else ""
@@ -864,7 +864,7 @@ def check_lean_compile(
     if not full_code:
         return False, "Empty Lean code"
 
-                                                                                      
+    # Basic structural check: must contain at least one top-level declaration keyword.
     if not any(kw in full_code for kw in LEAN_DECL_KEYWORDS):
         return False, "Missing Lean declaration keyword"
 
@@ -904,27 +904,27 @@ def check_lean_compile(
                 "snippets": [{"id": snippet_id, "code": full_code}],
                 "timeout": timeout,
             },
-            timeout=timeout + 30,                                                  
+            timeout=timeout + 30,  # HTTP timeout slightly longer than Lean timeout
         )
         response.raise_for_status()
         result = response.json()
 
-                       
+        # Parse result.
         if "results" not in result or len(result["results"]) == 0:
             return False, "No results from Lean server"
 
         check_result = result["results"][0]
         messages = check_result.get("response", {}).get("messages", [])
 
-                                         
+        # Check for error-level messages.
         errors = [m for m in messages if m.get("severity") == "error"]
 
         if errors:
-                                     
+            # Extract error messages.
             error_msgs = [e.get("data", "Unknown error") for e in errors]
             return False, "\n".join(error_msgs)
 
-                                       
+        # No errors: compile succeeded.
         return True, ""
 
     except requests.exceptions.Timeout:
@@ -937,9 +937,9 @@ def check_lean_compile(
         return False, f"[Exception] {type(e).__name__}: {e}"
 
 
-                                                                               
-                           
-                                                                               
+# =============================================================================
+# CriticLean semantic check
+# =============================================================================
 
 async def check_critic_lean(informal: str, formal: str) -> Tuple[int, str]:
     """
@@ -984,16 +984,16 @@ def extract_critic_accuracy_confirmation(reasons: str) -> str:
     if m:
         return m.group(1).strip()
 
-                                                              
+    # Fallback: try to find the start marker and slice to end.
     m2 = re.search(r"(?is)\b5\s*\.?\s*Accuracy\s*Confirmation\b", s)
     if not m2:
         return ""
     return s[m2.end() :].lstrip(" :\n\t").strip()
 
 
-                                                                               
-                                   
-                                                                               
+# =============================================================================
+# BEq+ equivalence check (optional)
+# =============================================================================
 
 def check_beq_plus(statement: str, ground_truth: str, header: str, timeout: int = 600) -> int:
     """
@@ -1037,9 +1037,9 @@ def check_beq_plus(statement: str, ground_truth: str, header: str, timeout: int 
         return 0
 
 
-                                                                               
-                  
-                                                                               
+# =============================================================================
+# Helper functions
+# =============================================================================
 
 def load_code_from_program(program_path: str) -> str:
     """
@@ -1128,9 +1128,9 @@ def get_experiment_kwargs(run_index: int) -> Dict[str, Any]:
     }
 
 
-                                                                               
-                              
-                                                                               
+# =============================================================================
+# Core: gated scoring function
+# =============================================================================
 
 def compute_gated_score(
     compile_ok: int,
@@ -1185,7 +1185,7 @@ def compute_gated_score(
     - score_semantic_bonus > score_cycle_weight
     - score_beq_bonus > score_semantic_bonus + score_cycle_weight
     """
-                                                                                          
+    # `potential` is reserved; currently excluded from combined_score to avoid spec drift.
     return float(
         int(compile_ok)
         * (
@@ -1197,9 +1197,9 @@ def compute_gated_score(
     )
 
 
-                                                                               
-                                    
-                                                                               
+# =============================================================================
+# Core: aggregate evaluation metrics
+# =============================================================================
 
 def aggregate_metrics(
     results: List[str],
@@ -1238,7 +1238,7 @@ def aggregate_metrics(
         "statement": extracted Lean statement,
     }
     """
-                                         
+    # Handle the empty-results edge case.
     if not results:
         return {
             "compile_ok": 0,
@@ -1257,16 +1257,16 @@ def aggregate_metrics(
     if not lean_code:
         lean_code = str(raw_output or "").strip()
 
-                                                                                
+    # Extract the first declaration (statement-only) for cycle / semantic / BEq.
     statement = normalize_lean_statement(lean_code)
 
     config = get_config()
-    lean_server_url = config.get("lean_server_url")               
+    lean_server_url = config.get("lean_server_url")  # from config
 
-                                                                               
-                                
-                                                                               
-                                                              
+    # =========================================================================
+    # Step 1: Lean compile check
+    # =========================================================================
+    # Compile check on the full Lean file (imports + theorem).
     compile_ok_bool, compile_error = _compile_cached(
         code=lean_code,
         timeout=config["compile_timeout"],
@@ -1274,42 +1274,42 @@ def aggregate_metrics(
     )
     compile_ok = 1 if compile_ok_bool else 0
 
-                                                       
+    # Extract error type for downstream repair prompts.
     compile_error_type = extract_compile_error_type(compile_error) if compile_error else ""
     compile_error_msg = truncate_error_msg(compile_error)
 
-                                                                   
+    # `potential` is fixed to 0.0 in v1 (reserved interface field).
     potential = 0.0
 
-                              
+    # Initialize metrics dict.
     metrics = {
-                                 
+        # Core fitness components
         "compile_ok": compile_ok,
         "compile_error_type": compile_error_type,
         "compile_error_msg": compile_error_msg,
-        "semantic_ok": 0,                              
+        "semantic_ok": 0,  # optional / may be disabled
         "critic_raw": "",
         "beq_ok": 0,
         "potential": potential,
         "cycle_score": 0.0,
-                        
+        # Derived scores
         "fitness_tuple": (compile_ok, 0, 0, 0.0),
         "combined_score": 0.0,
-                                            
+        # Raw artifacts (for repair + audit)
         "code": lean_code,
-                                                                  
+        # Extracted declaration (for scoring + downstream prompts)
         "statement": statement,
     }
 
-                                                                               
-                                                          
-                                                                               
-                                                              
-                                                               
+    # =========================================================================
+    # Lexicographic gating: if compile_ok=0, skip the rest
+    # =========================================================================
+    # Constraint F: if compile_ok=0, combined_score must be 0.
+    # Avoid wasting API calls on semantic checks; return early.
     if compile_ok == 0:
         metrics["combined_score"] = 0.0
         metrics["fitness_tuple"] = (0, 0, 0, 0.0)
-                                                                           
+        # Add public/private sections (needed even when compilation fails).
         metrics["public"] = {
             "compile_ok": 0,
             "cycle_score": 0.0,
@@ -1322,20 +1322,20 @@ def aggregate_metrics(
         }
         return metrics
 
-                                                                               
-                                                                                            
-                                                                               
-                                                                                         
+    # =========================================================================
+    # Step 2+4: Semantic (CriticLean) + cycle-consistency (independent; can run in parallel)
+    # =========================================================================
+    # Default OFF (noisy). When disabled, semantic_ok stays 0 and does not drive scoring.
     semantic_ok = 0
     cycle_score = 0.0
 
     use_semantic = bool(config.get("use_semantic", False))
     use_cycle = bool(config.get("use_cycle_consistency", False))
 
-                                                                             
-                                                                            
-                                                                                
-                                               
+    # IMPORTANT: CriticLean should judge the *same input* as compilation: the
+    # full Lean file (imports + declaration). We never strip headers. We may
+    # optionally normalize the top-level declaration name to reduce naming noise
+    # when `semantic_normalize_decl_name=True`.
     formal_for_semantic = lean_code
     if use_semantic:
         metrics["semantic_input_kind"] = "lean_code_full_file"
@@ -1394,7 +1394,7 @@ def aggregate_metrics(
         else:
             cycle_score, cycle_meta = cycle_res
     else:
-                        
+        # Semantic only.
         if use_semantic:
             try:
                 sem_score, critic_raw = asyncio.run(
@@ -1417,7 +1417,7 @@ def aggregate_metrics(
             except Exception as e:
                 metrics["critic_raw"] = f"[Error] {e}"
 
-                                  
+        # Cycle only (default ON).
         if use_cycle:
             cycle_score, cycle_meta = cycle_consistency_score(
                 target_informal=config.get("informal", ""),
@@ -1429,9 +1429,9 @@ def aggregate_metrics(
         metrics.update(cycle_meta)
     metrics["cycle_score"] = float(cycle_score)
 
-                                                                               
-                                                                       
-                                                                               
+    # =========================================================================
+    # Step 3: BEq+ equivalence check (optional; only when compile_ok=1)
+    # =========================================================================
     beq_ok = 0
     if config["use_beq"] and config["ground_truth"]:
         cand_stmt = statement
@@ -1461,13 +1461,13 @@ def aggregate_metrics(
         )
         metrics["beq_ok"] = beq_ok
 
-                                                                       
+    # NOTE: cycle_score is computed and written to metrics in Step 2+4.
 
-                                                                               
-                                                                             
-                                                                               
-                                                                                              
-                                                     
+    # =========================================================================
+    # Compute final fitness_tuple and combined_score (compile is a hard gate)
+    # =========================================================================
+    # NOTE: fitness_tuple is used for lexicographic stagnation detection and audits, priority:
+    # compile_ok > beq_ok > semantic_ok > cycle_score
     metrics["fitness_tuple"] = (compile_ok, int(beq_ok), int(semantic_ok), float(cycle_score))
 
     def _cfg_float(key: str, default: float) -> float:
@@ -1494,29 +1494,29 @@ def aggregate_metrics(
         score_beq_bonus=_cfg_float("score_beq_bonus", 200.0),
     )
 
-                                                                               
-                                                   
-                                                                               
-                                                                                           
-                                                                  
+    # =========================================================================
+    # Add public/private structure for LLM feedback
+    # =========================================================================
+    # Shinka expects metrics["public"] to contain the fields shown to the LLM; they will be
+    # formatted via perf_str() and injected into ITER_MSG prompts.
     metrics["public"] = {
         "compile_ok": compile_ok,
         "cycle_score": round(cycle_score, 4),
         "semantic_ok": int(semantic_ok),
         "beq_ok": beq_ok,
     }
-                                                        
+    # "private" holds debug fields not shown to the LLM.
     metrics["private"] = {
         "compile_error_type": compile_error_type,
         "compile_error_msg": compile_error_msg,
         "cycle_normalized_log_prob": metrics.get("cycle_normalized_log_prob"),
     }
 
-                                                                               
-                                                            
-                                                                               
+    # =========================================================================
+    # Save detailed results to file (for debugging/auditing)
+    # =========================================================================
     try:
-                                                       
+        # Convert tuple -> list for JSON serialization.
         metrics_for_json = metrics.copy()
         metrics_for_json["fitness_tuple"] = list(metrics["fitness_tuple"])
         with open(Path(results_dir) / "eval_details.json", "w") as f:
@@ -1527,9 +1527,9 @@ def aggregate_metrics(
     return metrics
 
 
-                                                                               
-                            
-                                                                               
+# =============================================================================
+# Main: evaluator entrypoint
+# =============================================================================
 
 def main(program_path: str, results_dir: str):
     """
@@ -1588,7 +1588,7 @@ def main(program_path: str, results_dir: str):
         correct, error_msg = validate_formalization(code, results_dir=results_dir)
         save_json_results(results_dir, metrics, correct, error_msg)
     else:
-                                                   
+        # Invoke ShinkaEvolve's evaluation harness.
         metrics, correct, error_msg = run_shinka_eval(
             program_path=program_path,
             results_dir=results_dir,
@@ -1599,7 +1599,7 @@ def main(program_path: str, results_dir: str):
             aggregate_metrics_fn=_aggregator,
         )
 
-                                       
+    # Print results (spec v1.1 format).
     print("\n[Evaluator] Results (spec v1.1):")
     print(f"  compile_ok: {metrics.get('compile_ok', 0)}")
     if metrics.get('compile_ok', 0) == 0:
@@ -1615,9 +1615,9 @@ def main(program_path: str, results_dir: str):
         print(f"  error: {error_msg[:200]}")
 
 
-                                                                               
-                
-                                                                               
+# =============================================================================
+# CLI entrypoint
+# =============================================================================
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Autoformalization evaluator")

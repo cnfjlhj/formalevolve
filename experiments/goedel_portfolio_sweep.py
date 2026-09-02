@@ -1,4 +1,4 @@
-                      
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -394,8 +394,8 @@ def main() -> int:
         raise SystemExit("Empty --k_list")
     fields = _parse_field_list(str(args.fields)) if str(args.fields or "").strip() else [str(args.field)]
 
-                                                     
-                                                                                                                 
+    # Safety defaults for CombiBench-style Fine-Eval:
+    # - without_solution requires the model to fill both answer+proof, so remote output must be a full Lean file.
     if (
         str(args.dataset_mode) == "ground_truth"
         and str(args.solution_mode) == "without_solution"
@@ -460,7 +460,7 @@ def main() -> int:
         job.out_dir.mkdir(parents=True, exist_ok=True)
         job.goedel_out_dir.mkdir(parents=True, exist_ok=True)
 
-                            
+        # 1) Export dataset.
         export_cmd = [
             sys.executable,
             str(build_script),
@@ -496,7 +496,7 @@ def main() -> int:
             _warn(f"export failed (k={job.k}): returncode={rc}")
             return rc
 
-                                            
+        # 2) Print (or run) Goedel commands.
         if str(args.inference_backend) == "remote":
             infer_cmd = [
                 sys.executable,
@@ -657,7 +657,7 @@ def main() -> int:
                     _warn(f"goedel inference failed (k={job.k}): returncode={infer_rc}")
                     return infer_rc
 
-                                                                     
+                # Final catch-up compile once inference has finished.
                 if input_path.exists():
                     rc3 = subprocess.run(compile_cmd, cwd=str(compile_cwd)).returncode
                     if rc3 != 0:

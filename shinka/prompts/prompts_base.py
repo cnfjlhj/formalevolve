@@ -56,7 +56,7 @@ def construct_eval_history_msg(
             f"{perf_str(prog.combined_score, prog.public_metrics)}\n\n"
         )
 
-                                                      
+        # Add text feedback if available and requested
         if include_text_feedback and prog.text_feedback:
             feedback_text = prog.text_feedback
             if isinstance(feedback_text, list):
@@ -79,7 +79,7 @@ def construct_individual_program_msg(
         f"Performance metrics:\n"
         f"{perf_str(program.combined_score, program.public_metrics)}\n\n"
     )
-                                              
+    # Include program correctness if available
     if program.correct:
         program_str += "The program is correct and passes all validation tests.\n\n"
     else:
@@ -87,7 +87,7 @@ def construct_individual_program_msg(
             "The program is incorrect and does not pass all validation tests.\n\n"
         )
 
-                                                  
+    # Add text feedback if available and requested
     if include_text_feedback and program.text_feedback:
         feedback_text = program.text_feedback
         if isinstance(feedback_text, list):

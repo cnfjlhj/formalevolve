@@ -38,13 +38,13 @@ class PromptSampler:
         self.language = language
         self.patch_types = patch_types
         self.patch_type_probs = patch_type_probs
-                                                                   
+        # Check if probabilities sum to 1.0 w. tolerance for errors
         prob_sum = np.sum(patch_type_probs)
         if not np.isclose(prob_sum, 1.0, atol=1e-6):
             raise ValueError(
                 f"Coding type probabilities must sum to 1.0, got {prob_sum:.6f}"
             )
-                                                    
+        # Whether to use text feedback in the prompt
         self.use_text_feedback = use_text_feedback
 
     def initial_program_prompt(self) -> Tuple[str, str]:
@@ -74,8 +74,8 @@ class PromptSampler:
         else:
             sys_msg = self.task_sys_msg
 
-                            
-                                                 
+        # Sample coding type
+        # Filter out crossover if no inspirations
         if len(archive_inspirations) == 0 and len(top_k_inspirations) == 0:
             valid_types = [t for t in self.patch_types if t != "cross"]
             valid_probs = [
@@ -83,7 +83,7 @@ class PromptSampler:
                 for t, p in zip(self.patch_types, self.patch_type_probs)
                 if t != "cross"
             ]
-                                       
+            # Renormalize probabilities
             valid_probs = [p / sum(valid_probs) for p in valid_probs]
             patch_type = np.random.choice(valid_types, p=valid_probs)
         else:
@@ -95,7 +95,7 @@ class PromptSampler:
         if patch_type == "diff":
             sys_msg += DIFF_SYS_FORMAT
         elif patch_type == "full":
-                                                                  
+            # Randomly sample from different full rewrite variants
             full_variant_idx = np.random.randint(0, len(FULL_SYS_FORMATS))
             selected_format = FULL_SYS_FORMATS[full_variant_idx]
             sys_msg += selected_format
@@ -111,8 +111,8 @@ class PromptSampler:
         else:
             eval_history_msg = ""
 
-                                
-                                                            
+        # Add top-k inspirations
+        # TODO(RobertTLange): Check if order needs inversion
         if len(top_k_inspirations) > 0:
             eval_history_msg += construct_eval_history_msg(
                 top_k_inspirations,
@@ -120,7 +120,7 @@ class PromptSampler:
                 include_text_feedback=self.use_text_feedback,
             )
 
-                                                          
+        # Format text feedback section for current program
         text_feedback_section = ""
         if self.use_text_feedback:
             text_feedback_section = "\n" + format_text_feedback_section(
@@ -164,7 +164,7 @@ class PromptSampler:
         else:
             raise ValueError(f"Invalid patch type: {patch_type}")
 
-                                              
+        # Add meta-recommendations if provided
         sum_rec_msg = ""
         if meta_recommendations not in [None, "none"] and patch_type != "cross":
             sum_rec_msg += "\n\n# Potential Recommendations"

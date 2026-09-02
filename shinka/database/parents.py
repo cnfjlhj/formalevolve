@@ -4,7 +4,7 @@ import sqlite3
 import math
 from abc import ABC, abstractmethod
 from typing import Optional, Callable, Any
-import numpy as np                
+import numpy as np  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +32,13 @@ def sample_with_powerlaw(items: list, alpha: float = 1.0) -> int:
     if not items:
         raise ValueError("Empty items list for power-law sampling")
 
-                                             
+    # Probabilities based on rank (index + 1)
     probs = np.array([(i + 1) ** (-alpha) for i in range(len(items))])
-    if np.sum(probs) == 0:                                           
-                                                                            
+    if np.sum(probs) == 0:  # Avoid div by zero if all probs are zero
+        # Fallback to uniform if power law results in all zero probabilities
         probs = np.ones(len(items))
 
-    probs = probs / probs.sum()             
+    probs = probs / probs.sum()  # Normalize
     logger.info(f"Power law probs: {probs.tolist()}")
     return np.random.choice(len(items), p=probs)
 
@@ -108,7 +108,7 @@ class PowerLawSamplingStrategy(ParentSamplingStrategy):
             raise ConnectionError("DB/config issue for parent sampling.")
 
         pid: Optional[str] = None
-                                                                                     
+        # Try elite archive for exploitation (archive only contains correct programs)
         if hasattr(self.config, "exploitation_ratio"):
             if np.random.random() < self.config.exploitation_ratio:
                 if self.island_idx is not None:
@@ -124,8 +124,8 @@ class PowerLawSamplingStrategy(ParentSamplingStrategy):
                 if archived_rows:
                     archived_program_ids = [row["program_id"] for row in archived_rows]
 
-                                                                                   
-                                                                          
+                    # Fetch Program objects. This could be slow if archive is huge.
+                    # Consider optimizing if performance becomes an issue.
                     archived_programs = []
                     for prog_id in archived_program_ids:
                         prog = self.get_program(prog_id)
@@ -133,7 +133,7 @@ class PowerLawSamplingStrategy(ParentSamplingStrategy):
                             archived_programs.append(prog)
 
                     if archived_programs:
-                                                                        
+                        # Sort by combined_score descending (best first)
                         archived_programs.sort(
                             key=lambda p: p.combined_score or 0.0, reverse=True
                         )
@@ -153,7 +153,7 @@ class PowerLawSamplingStrategy(ParentSamplingStrategy):
                             f"Island: {selected_prog.island_idx})"
                         )
 
-                                                                       
+        # Exploration from all correct programs (sorted by performance)
         if not pid:
             if self.island_idx is not None:
                 self.cursor.execute(
@@ -193,12 +193,12 @@ class PowerLawSamplingStrategy(ParentSamplingStrategy):
                         f"Island: {selected_prog.island_idx})"
                     )
 
-                                                                    
+        # Exploration from different islands (only correct programs)
         if (
             not pid
             and hasattr(self.config, "num_islands")
             and self.config.num_islands > 0
-            and self.island_idx is None                                        
+            and self.island_idx is None  # Only do this if no island constraint
         ):
             self.cursor.execute("SELECT DISTINCT island_idx FROM programs")
             island_indices = [r["island_idx"] for r in self.cursor.fetchall()]
@@ -221,9 +221,9 @@ class PowerLawSamplingStrategy(ParentSamplingStrategy):
                             f"(Gen: {prog.generation}, Score: {score:.4f})"
                         )
 
-                                           
+        # Fallbacks (only correct programs)
         if not pid:
-                                                        
+            # Try best program (which should be correct)
             if self.best_program_id:
                 best_prog = self.get_program(self.best_program_id)
                 if (
@@ -241,7 +241,7 @@ class PowerLawSamplingStrategy(ParentSamplingStrategy):
                         f"(Gen: {best_prog.generation}, Score: {score:.4f})"
                     )
 
-                                             
+        # Final fallback: any correct program
         if not pid:
             if self.island_idx is not None:
                 self.cursor.execute(
@@ -276,7 +276,7 @@ class WeightedSamplingStrategy(ParentSamplingStrategy):
     """Weighted sampling strategy for parent selection."""
 
     def sample_parent(self) -> Any:
-                                              
+        # Fetch all programs from the archive.
         if self.island_idx is not None:
             self.cursor.execute(
                 """
@@ -307,7 +307,7 @@ class WeightedSamplingStrategy(ParentSamplingStrategy):
                 ):
                     return best_prog
 
-                                                          
+            # Fallback to random correct program in island
             if self.island_idx is not None:
                 self.cursor.execute(
                     """SELECT id FROM programs 
@@ -327,7 +327,7 @@ class WeightedSamplingStrategy(ParentSamplingStrategy):
         for row in archive_rows:
             p_dict = dict(row)
 
-                               
+            # Parse JSON fields
             p_dict["public_metrics"] = (
                 json.loads(p_dict["public_metrics"])
                 if p_dict.get("public_metrics")
@@ -370,12 +370,12 @@ class WeightedSamplingStrategy(ParentSamplingStrategy):
                 else []
             )
 
-                                                                                           
+            # Create a simple dataclass-like object from the dict to avoid circular imports
             class SimpleProgram:
                 def __init__(self, data):
                     for key, value in data.items():
                         setattr(self, key, value)
-                                                      
+                    # Ensure required attributes exist
                     if not hasattr(self, "combined_score"):
                         self.combined_score = 0.0
                     if not hasattr(self, "children_count"):
@@ -387,43 +387,43 @@ class WeightedSamplingStrategy(ParentSamplingStrategy):
 
             eligible_programs.append(SimpleProgram(p_dict))
 
-                                                                
+        # Calculate baseline performance (alpha_0) as the median
         scores = [p.combined_score or 0.0 for p in eligible_programs]
         alpha_0 = np.median(scores) if scores else 0.0
 
-                                                     
-                                                                
+        # Calculate scale-robust normalization factor
+        # Use median absolute deviation (MAD) for robust scaling
         score_deviations = [abs(score - alpha_0) for score in scores]
         mad = np.median(score_deviations) if score_deviations else 1.0
-                                                                     
+        # Avoid division by zero - use a small epsilon if MAD is zero
         scale_factor = max(mad, 1e-6)
 
-                                            
+        # Calculate weights for each program
         weights = []
         lambda_ = self.config.parent_selection_lambda
 
         for i, p in enumerate(eligible_programs):
-                                                       
+            # performance (alpha_i) from combined_score
             alpha_i = p.combined_score or 0.0
-                                  
+            # children count (n_i)
             n_i = p.children_count
 
-                                                                                    
-                                                                                             
+            # sigmoid-scaled performance (s_i) - scale-robust and numerically stable
+            # Normalize the difference by the scale factor to make it robust to problem scale
             normalized_diff = (alpha_i - alpha_0) / scale_factor
             s_i = stable_sigmoid(lambda_ * normalized_diff)
 
-                                                                                
-             
-                                                                                  
-                                                                                  
-                                                                             
-                                                                     
+            # novelty/diversity bonus (h_i): downweight frequently-used parents.
+            #
+            # NOTE: historically this was hard-coded as 1/(1+n_i). We extend it to
+            # respect the shared config knob `parent_usage_penalty_alpha` so users
+            # can tune diversity under weighted sampling without switching to
+            # cycle-softmax (which relies on a noisier proxy signal).
             penalty_alpha = float(getattr(self.config, "parent_usage_penalty_alpha", 0.0))
             penalty_alpha = max(penalty_alpha, 0.0)
             h_i = 1.0 / (1.0 + (1.0 + penalty_alpha) * float(max(n_i, 0)))
 
-                                       
+            # unnormalized weight (w_i)
             w_i = s_i * h_i
             weights.append(w_i)
             logger.debug(
@@ -431,12 +431,12 @@ class WeightedSamplingStrategy(ParentSamplingStrategy):
                 f"normalized_diff: {normalized_diff:.2f}, scale_factor: {scale_factor:.2f}"
             )
 
-                                                
+        # Normalize weights to get probabilities
         weights_sum = sum(weights)
         if weights_sum > 0:
             probabilities = [w / weights_sum for w in weights]
         else:
-                                                                      
+            # Fallback to uniform distribution if all weights are zero
             logger.warning(
                 "All parent selection weights are zero, falling back to "
                 "uniform sampling."
@@ -449,7 +449,7 @@ class WeightedSamplingStrategy(ParentSamplingStrategy):
         logger.info(
             f"Island {self.island_idx} => Scores: {[p.combined_score for p in eligible_programs]}"
         )
-                                                  
+        # Sample one parent based on probabilities
         selected_parent = np.random.choice(eligible_programs, p=probabilities)
 
         logger.info(
@@ -479,7 +479,7 @@ class CycleSoftmaxSamplingStrategy(ParentSamplingStrategy):
     """
 
     def sample_parent(self) -> Any:
-                                              
+        # Fetch all programs from the archive.
         if self.island_idx is not None:
             self.cursor.execute(
                 """
@@ -544,8 +544,8 @@ class CycleSoftmaxSamplingStrategy(ParentSamplingStrategy):
                 continue
 
             eligible_programs.append(prog)
-                                                                                  
-                                                                  
+            # Diversity penalty: downweight parents that have been used frequently
+            # (proxied by children_count). Set alpha=0 to disable.
             alpha = float(getattr(self.config, "parent_usage_penalty_alpha", 0.0))
             alpha = max(alpha, 0.0)
             try:
@@ -564,12 +564,12 @@ class CycleSoftmaxSamplingStrategy(ParentSamplingStrategy):
                 "No eligible programs with cycle_normalized_log_prob in metadata; "
                 "falling back to uniform sampling over archive."
             )
-                                                        
+            # Uniform over all archived correct programs
             idx = np.random.choice(len(archive_rows))
             pid = dict(archive_rows[idx]).get("id")
             return self.get_program(pid) if pid else None
 
-                                                       
+        # Stable softmax normalization at sampling time
         max_logit = float(np.max(logits))
         exp_scores = np.exp(np.array(logits) - max_logit)
         z = float(np.sum(exp_scores))
@@ -615,9 +615,9 @@ class BeamSearchSamplingStrategy(ParentSamplingStrategy):
     def sample_parent(self) -> Any:
         num_beams = getattr(self.config, "num_beams", 5)
 
-                                                      
+        # If no current beam search parent, select one
         if not self.beam_search_parent_id:
-                                             
+            # Get top programs and select one
             if self.get_best_program_func:
                 best_program = self.get_best_program_func()
                 if best_program:
@@ -632,11 +632,11 @@ class BeamSearchSamplingStrategy(ParentSamplingStrategy):
                         f"Score: {best_program.combined_score or 0.0:.4f})"
                     )
 
-                                            
+        # Use the current beam search parent
         if self.beam_search_parent_id:
             parent = self.get_program(self.beam_search_parent_id)
             if parent:
-                                                                                 
+                # Check if we should continue with this parent based on num_beams
                 self.cursor.execute(
                     "SELECT COUNT(*) FROM programs WHERE parent_id = ?",
                     (self.beam_search_parent_id,),
@@ -650,7 +650,7 @@ class BeamSearchSamplingStrategy(ParentSamplingStrategy):
                     )
                     return parent
                 else:
-                                                                       
+                    # This parent has enough children, select a new one
                     if self.get_best_program_func:
                         best_program = self.get_best_program_func()
                         if best_program:
@@ -666,11 +666,11 @@ class BeamSearchSamplingStrategy(ParentSamplingStrategy):
                             )
                             return best_program
 
-                                  
+        # Fallback to best program
         if self.best_program_id:
             return self.get_program(self.best_program_id)
 
-                        
+        # Final fallback
         self.cursor.execute(
             "SELECT id FROM programs WHERE correct = 1 ORDER BY RANDOM() LIMIT 1"
         )
@@ -682,7 +682,7 @@ class BestOfNSamplingStrategy(ParentSamplingStrategy):
     """Best-of-N sampling strategy that always returns the initial program as parent."""
 
     def sample_parent(self) -> Any:
-                                                                                     
+        # Find the initial program (generation 0) in the specified island or globally
         if self.island_idx is not None:
             self.cursor.execute(
                 """SELECT id FROM programs
@@ -710,7 +710,7 @@ class BestOfNSamplingStrategy(ParentSamplingStrategy):
                 )
                 return prog
 
-                                                                             
+        # Fallback: if no generation 0 program found, try any correct program
         logger.warning(
             "No generation 0 program found, falling back to any correct program"
         )
@@ -828,9 +828,9 @@ class CombinedParentSelector:
 
         parent = strategy.sample_parent()
 
-                                                     
+        # Fallback to best program if sampling failed
         if not parent:
-                                    
+            # Try best program first
             if self.best_program_id:
                 parent = self.get_program(self.best_program_id)
                 if (
@@ -840,7 +840,7 @@ class CombinedParentSelector:
                 ):
                     return parent
 
-                                                    
+            # Final fallback: random correct program
             if island_idx is not None:
                 self.cursor.execute(
                     """SELECT id FROM programs 

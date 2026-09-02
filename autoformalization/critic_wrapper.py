@@ -26,9 +26,9 @@ def _env_int(name: str, default: int) -> int:
     except Exception:
         return int(default)
 
-                                                                              
-                                 
-                                                                              
+# ============================================================================
+# CriticLean Server Configuration
+# ============================================================================
 
 CRITIC_LEAN_URL = os.environ.get(
     "CRITIC_LEAN_URL",
@@ -36,11 +36,11 @@ CRITIC_LEAN_URL = os.environ.get(
 )
 CRITIC_LEAN_MODEL = os.environ.get("CRITIC_LEAN_MODEL", "criticlean-qwen3-14b")
 
-                     
+# Async configuration
 MAX_CONCURRENT_REQUESTS = _env_int("CRITIC_LEAN_MAX_CONCURRENT_REQUESTS", 10)
-REQUEST_TIMEOUT = _env_int("CRITIC_LEAN_TIMEOUT_S", 600)                            
+REQUEST_TIMEOUT = _env_int("CRITIC_LEAN_TIMEOUT_S", 600)  # seconds (default 10 min)
 
-              
+# Global state
 _semaphore: Optional[asyncio.Semaphore] = None
 _session: Optional[aiohttp.ClientSession] = None
 
@@ -74,22 +74,22 @@ async def close_session():
         _session = None
 
 
-                                                                              
-                                                  
-                                                                              
+# ============================================================================
+# Output parsing (robust to non-JSON / truncation)
+# ============================================================================
 
 
 def _strip_code_fences(text: str) -> str:
     s = (text or "").strip()
     if not s:
         return ""
-                                         
+    # Common pattern: ```json\n{...}\n```
     if "```" in s:
-                                                
+        # Remove fence markers but keep content.
         s = re.sub(r"(?is)^```[a-zA-Z0-9_-]*\s*", "", s)
         s = re.sub(r"(?is)\s*```$", "", s)
         s = s.replace("```", "")
-                                              
+    # Some models emit a leading `json` token.
     s = re.sub(r"(?is)^\s*json\s*", "", s)
     return s.strip()
 
@@ -138,7 +138,7 @@ def _normalize_verdict_text(text: str) -> Optional[str]:
     if not s:
         return None
 
-                                                             
+    # Strip common wrappers: quotes / brackets / parentheses.
     s = s.strip().strip(" \t\r\n")
     s = re.sub(r'^[\s\[\(\{\'"]+', "", s)
     s = re.sub(r'[\s\]\)\}\'"]+$', "", s)
@@ -149,7 +149,7 @@ def _normalize_verdict_text(text: str) -> Optional[str]:
     if s.lower() == "incorrect":
         return "Incorrect"
 
-                                                                                   
+    # If both appear (e.g. "Correct/Incorrect"), follow the "last occurrence" rule.
     matches = list(re.finditer(r"\b(correct|incorrect)\b", s, flags=re.IGNORECASE))
     if not matches:
         return None
@@ -175,8 +175,8 @@ def _last_verdict_word(text: str) -> Optional[str]:
     if not s:
         return None
 
-                                                                                            
-                                                                                         
+    # If the output is short, models often answer in prose rather than emitting a key/value.
+    # In this regime, the "last occurrence wins" heuristic is usually the best we can do.
     if len(s) <= 512:
         matches = list(re.finditer(r"\b(correct|incorrect)\b", s, flags=re.IGNORECASE))
         if matches:
@@ -184,11 +184,11 @@ def _last_verdict_word(text: str) -> Optional[str]:
             return "Correct" if last == "correct" else "Incorrect"
 
     patterns = [
-                                  
+        # Standalone verdict line.
         re.compile(r"(?im)^\s*(correct|incorrect)\s*$"),
-                               
+        # Quoted verdict token.
         re.compile(r'(?i)["\']\s*(correct|incorrect)\s*["\']'),
-                                                                                      
+        # Verdict token right before end-of-output, but only if it looks like a value.
         re.compile(r"(?is)(?:^|[:\n])\s*(correct|incorrect)\b\s*[\}\]\s]*\Z"),
     ]
     for pat in patterns:
@@ -201,12 +201,12 @@ def _last_verdict_word(text: str) -> Optional[str]:
 
 def _last_verdict_after_key(text: str, *, key: str = "is_assistant_correct") -> Optional[str]:
     key_re = re.compile(rf"\b{re.escape(key)}\b", flags=re.IGNORECASE)
-                                                                         
+    # Prefer "verdict-ish" occurrences that look like a value, not prose.
     word_re = re.compile(r'(?i)(?:"|\')?\s*\b(incorrect|correct)\b\s*(?:"|\')?')
     last: Optional[str] = None
     for m in key_re.finditer(text or ""):
         window = (text or "")[m.end() : m.end() + 256]
-                                                                           
+        # Only accept tokens that appear after a `:` (JSON-ish / YAML-ish).
         colon_pos = window.find(":")
         if colon_pos == -1:
             continue
@@ -221,9 +221,9 @@ def _last_verdict_after_key(text: str, *, key: str = "is_assistant_correct") -> 
 
 @dataclass(frozen=True)
 class _ParsedCriticOutput:
-    verdict: Optional[str]                              
+    verdict: Optional[str]  # "Correct"/"Incorrect"/None
     reasons: str
-    method: str                                                                 
+    method: str  # json / extracted_json / salvaged_key / salvaged_word / failed
 
 
 def _parse_criticlean_output(model_output: str, *, finish_reason: Optional[str]) -> _ParsedCriticOutput:
@@ -234,9 +234,9 @@ def _parse_criticlean_output(model_output: str, *, finish_reason: Optional[str])
             diag += f" (finish_reason={finish_reason})"
         return _ParsedCriticOutput(verdict=None, reasons=diag, method="failed")
 
-                                                    
+    # 1) Try strict JSON on the whole content first.
     candidates: List[str] = [cleaned]
-                                                                         
+    # 2) Also try any balanced JSON objects embedded in surrounding text.
     candidates.extend(_extract_balanced_json_objects(cleaned))
 
     parsed: Optional[_ParsedCriticOutput] = None
@@ -251,39 +251,39 @@ def _parse_criticlean_output(model_output: str, *, finish_reason: Optional[str])
         if not verdict:
             continue
         reasons = str(obj.get("reasons") or "").strip()
-                                                                             
+        # If reasons is missing, keep the whole cleaned output for debugging.
         if not reasons:
             reasons = cleaned
         method = "json" if cand == cleaned else "extracted_json"
         parsed = _ParsedCriticOutput(verdict=verdict, reasons=reasons, method=method)
-                                                                               
+        # Keep the last parseable verdict (matches the "last occurrence" rule).
         continue
 
     if parsed is not None:
         return parsed
 
-                                                                                
+    # 3) Salvage: prefer extracting verdict after the declared key (tail-first).
     tail = cleaned[-4000:]
     verdict = _last_verdict_after_key(tail) or _last_verdict_after_key(cleaned)
     if verdict:
         return _ParsedCriticOutput(verdict=verdict, reasons=cleaned, method="salvaged_key")
 
-                                                                         
+    # 4) Salvage: fallback to last "Correct/Incorrect" word (tail-first).
     verdict = _last_verdict_word(tail) or _last_verdict_word(cleaned)
     if verdict:
         return _ParsedCriticOutput(verdict=verdict, reasons=cleaned, method="salvaged_word")
 
-                
-                                                                       
+    # 5) Failed.
+    # Provide a helpful diagnostic; include finish_reason if available.
     diag = f"[ParseError] Could not extract verdict"
     if finish_reason:
         diag += f" (finish_reason={finish_reason})"
     return _ParsedCriticOutput(verdict=None, reasons=diag + "\n" + cleaned, method="failed")
 
 
-                                                                              
-                                       
-                                                                              
+# ============================================================================
+# CriticLean Prompt (New Prompt Format)
+# ============================================================================
 
 CRITIC_PROMPT_TEMPLATE = """Role: Lean & Formal Verification Expert
 Input:
@@ -368,9 +368,9 @@ def _audit_write(dir_path: Path, *, prompt: str, payload: dict, response: dict, 
     )
 
 
-                                                                              
-                   
-                                                                              
+# ============================================================================
+# Main API Function
+# ============================================================================
 
 async def critic_eval(informal: str, formal: str) -> Tuple[int, str]:
     """
@@ -442,11 +442,11 @@ async def critic_eval(informal: str, formal: str) -> Tuple[int, str]:
                     try:
                         _audit_write(audit_dir, prompt=user_prompt, payload=payload, response=data, parsed=parsed)
                     except Exception:
-                                                                                           
+                        # Best-effort only; never fail the evaluation because of audit I/O.
                         pass
                 if parsed.verdict:
                     score = 1 if parsed.verdict == "Correct" else 0
-                                                                                      
+                    # Keep the raw-ish content for audit/debug when we had to salvage.
                     if parsed.method.startswith("salvaged"):
                         return score, f"[Salvaged:{parsed.method}] {parsed.reasons}"
                     return score, parsed.reasons
@@ -483,9 +483,9 @@ async def batch_critic_eval(
     return await asyncio.gather(*tasks)
 
 
-                                                                              
-      
-                                                                              
+# ============================================================================
+# Test
+# ============================================================================
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

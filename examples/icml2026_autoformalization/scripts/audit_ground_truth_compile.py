@@ -1,4 +1,4 @@
-                      
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -252,7 +252,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     "compile_ok_ratio": (float(ok) / float(total)) if total else 0.0,
                     "compile_timeout": int(args.compile_timeout),
                     "lean_server_url": str(args.lean_server_url),
-                    "note": "Local artifact; do not commit to an anonymous repo.",
+                    "note": "Local artifact; do not commit machine-specific service metadata.",
                 },
                 indent=2,
                 ensure_ascii=False,

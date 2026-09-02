@@ -1,0 +1,13 @@
+FormalEvolve
+Copyright 2026 FormalEvolve authors
+
+This product includes software developed by Sakana AI and contributors for
+ShinkaEvolve (https://github.com/SakanaAI/ShinkaEvolve), Copyright 2025
+Sakana AI, licensed under the Apache License, Version 2.0.
+
+FormalEvolve contains modifications and extensions to the ShinkaEvolve
+software. Those modifications are identified by the FormalEvolve Git history.
+
+Bundled benchmark snapshots derived from ProofNet and CombiBench are licensed
+separately under the MIT License. Their copyright notices and license texts are
+provided in THIRD_PARTY_NOTICES.md and third_party/licenses/.

@@ -40,10 +40,10 @@ def query_openai(
     """Query OpenAI model using Chat Completions API."""
     new_msg_history = msg_history + [{"role": "user", "content": msg}]
 
-                             
+    # Build the message list.
     messages = [{"role": "system", "content": system_msg}] + new_msg_history
 
-                                                                                
+    # Normalize kwargs: map `max_output_tokens` -> `max_tokens` (compatibility).
     api_kwargs = {}
     if "max_output_tokens" in kwargs:
         api_kwargs["max_tokens"] = kwargs.pop("max_output_tokens")
@@ -52,10 +52,10 @@ def query_openai(
     if "temperature" in kwargs:
         api_kwargs["temperature"] = kwargs.pop("temperature")
     if "seed" in kwargs:
-                                                                                       
+        # vLLM OpenAI-compatible servers may support `seed` for deterministic sampling.
         api_kwargs["seed"] = kwargs["seed"]
     if "reasoning" in kwargs:
-                                                                       
+        # OpenAI reasoning-model parameter (may need special handling).
         kwargs.pop("reasoning")
 
     if output_model is None:
@@ -67,7 +67,7 @@ def query_openai(
         content = response.choices[0].message.content
         new_msg_history.append({"role": "assistant", "content": content})
     else:
-                                                
+        # Structured output (uses standard API).
         response = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -76,10 +76,10 @@ def query_openai(
         content = response.choices[0].message.content
         new_msg_history.append({"role": "assistant", "content": content})
 
-                   
+    # Compute cost.
     input_tokens = response.usage.prompt_tokens
     output_tokens = response.usage.completion_tokens
-                                                                  
+    # For custom models (e.g., vLLM), use default pricing (0 cost)
     model_pricing = OPENAI_MODELS.get(model, {"input_price": 0.0, "output_price": 0.0})
     input_cost = model_pricing["input_price"] * input_tokens
     output_cost = model_pricing["output_price"] * output_tokens

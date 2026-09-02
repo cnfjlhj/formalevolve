@@ -23,7 +23,7 @@ theorem foo : let x := 1; x = 1 := by sorry
         self.assertTrue(bool(info.get("ok", False)))
         self.assertIn("let x := 1; x = 1", out)
         self.assertIn(":= by sorry", out)
-                                                                          
+        # Regression guard: previously mis-split at the `:=` inside `let`.
         self.assertNotIn("(let x) := 1", out)
 
     def test_safe_mode_handles_let_binding_with_by(self) -> None:

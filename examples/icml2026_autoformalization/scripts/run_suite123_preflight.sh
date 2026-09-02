@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Preflight runner for the 3 paper-aligned modes:
+#   suite1 = ours (evolution)
+#   suite2 = batchN (sampling baseline)
+#   suite3 = repairloop1 (compile-repair baseline)
+#
+# Default behavior is a NO-NETWORK sanity check using --llm_mode mock.
+# For real runs, set:
+#   OPENAI_LLM_BASE_URL="http://<host>:<port>/v1"
+#   OPENAI_API_KEY="EMPTY"
+#   AUTOFORMAL_LLM_MODELS="<GEN_MODEL_ID>"
+#
+# Optional (semantic judge):
+#   CRITIC_LEAN_BASE_URL="http://<host>:<port>"
+#   CRITIC_LEAN_MODEL="<MODEL_ID>"
+# and pass: --use_semantic
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TS="$(date +%Y%m%d_%H%M%S)"
@@ -17,6 +32,7 @@ EXTRA_ARGS=("$@")
 OUT_BASE="/tmp/formalevolve_suite123_${DATASET}_n${NUM_PROBLEMS}_calls${MAX_CALLS}_${TS}"
 mkdir -p "${OUT_BASE}"
 
+# Make mock runs deterministic and non-degenerate by pinning the fixture.
 export AUTOFORMAL_MOCK_STATEMENTS_PATH="${ROOT}/fixtures/mock_statements.json"
 
 run_one() {

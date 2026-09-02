@@ -89,7 +89,7 @@ def extract_first_declaration(text: str) -> Optional[str]:
             decl_idx = i
             break
     if decl_idx is None:
-        return None                                             
+        return None  # Return None when no declaration is found.
     start = decl_idx
     while start > 0 and lines[start - 1].lstrip().startswith("@["):
         start -= 1
@@ -115,15 +115,15 @@ def normalize_lean_code(raw_output: str) -> Optional[str]:
     if not text:
         return None
 
-                                                       
+    # Strip common thinking tags (Qwen/DeepSeek style).
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
-                                       
+    # Prefer explicit Lean code fences.
     fenced = re.search(r"```(?:lean4?|lean)\s*\n(.*?)```", text, re.DOTALL)
     if fenced:
         text = fenced.group(1).strip()
     else:
-                                   
+        # Fallback: any code fence.
         fenced_any = re.search(r"```\s*\n(.*?)```", text, re.DOTALL)
         if fenced_any:
             text = fenced_any.group(1).strip()
@@ -132,7 +132,7 @@ def normalize_lean_code(raw_output: str) -> Optional[str]:
     if not text:
         return None
 
-                                                      
+    # Must contain at least one top-level declaration.
     if extract_first_declaration(text) is None:
         return None
 
@@ -277,19 +277,19 @@ theorem infinitude_of_primes : ∀ N, ∃ p, N ≤ p ∧ Nat.Prime p := by sorry
         return normalize_lean_code(raw_output)
 
 
-                                                                               
-                                
-                                                                               
+# =============================================================================
+# Adapter registry and selection
+# =============================================================================
 
-                                                           
-                                                                                                  
+# Model keywords that should use the simple-prompt adapter.
+# These models are typically trained for Lean 4 formalization and have a more fixed output format.
 SIMPLE_PROMPT_MODELS = [
-    "kimina",                                
-    "herald",                 
-    "autoformalizer",                               
+    "kimina",  # Kimina-Autoformalizer family
+    "herald",  # Herald family
+    "autoformalizer",  # other autoformalizer models
 ]
 
-                                                                 
+# Mapping from model keywords to adapter classes (keyword match).
 _ADAPTER_PATTERNS = [(kw, KiminaAdapter) for kw in SIMPLE_PROMPT_MODELS]
 
 
@@ -318,7 +318,7 @@ def get_model_adapter(model_name: str) -> ModelAdapter:
         if re.search(pattern, model_lower):
             return adapter_class()
 
-                               
+    # Default: general adapter.
     return GeneralAdapter()
 
 
@@ -327,9 +327,9 @@ def is_kimina_model(model_name: str) -> bool:
     return isinstance(get_model_adapter(model_name), KiminaAdapter)
 
 
-                                                                               
-                     
-                                                                               
+# =============================================================================
+# Convenience helpers
+# =============================================================================
 
 def formalize_with_adapter(
     model_name: str,

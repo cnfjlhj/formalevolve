@@ -7,10 +7,10 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Optional, Any, Dict, List
 from collections import defaultdict
-import rich.box                
-import rich                
-from rich.console import Console as RichConsole                
-from rich.table import Table as RichTable                
+import rich.box  # type: ignore
+import rich  # type: ignore
+from rich.console import Console as RichConsole  # type: ignore
+from rich.table import Table as RichTable  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class DefaultIslandAssignmentStrategy(IslandStrategy):
             program.island_idx = 0
             return
 
-                                                                           
+        # Check for uninitialized islands (islands with no programs at all)
         islands_with_correct = self.get_initialized_islands()
         islands_without_correct = [
             i for i in range(num_islands) if i not in islands_with_correct
@@ -88,7 +88,7 @@ class DefaultIslandAssignmentStrategy(IslandStrategy):
             )
             return
 
-                                                                       
+        # If the program has a parent, it inherits the parent's island.
         if program.parent_id:
             self.cursor.execute(
                 "SELECT island_idx FROM programs WHERE id = ?", (program.parent_id,)
@@ -102,7 +102,7 @@ class DefaultIslandAssignmentStrategy(IslandStrategy):
                 )
                 return
 
-                                                   
+        # Final fallback: assign to a random island
         program.island_idx = random.randint(0, num_islands - 1)
         logger.debug(
             f"Assigned program {program.id} to random island "
@@ -138,24 +138,24 @@ class CopyInitialProgramIslandStrategy(IslandStrategy):
             program.island_idx = 0
             return
 
-                                                                 
+        # Check if this is the very first program in the database
         self.cursor.execute("SELECT COUNT(*) FROM programs")
         program_count = (self.cursor.fetchone() or [0])[0]
         if program_count == 0:
-                                                            
+            # This is the first program - assign to island 0
             program.island_idx = 0
             logger.debug(
                 f"Assigned first program {program.id} to island 0, "
                 "will create copies for other islands"
             )
-                                                                       
-                                                                        
+            # Note: The copying will happen after this program is added
+            # We'll set a flag in metadata to indicate copying is needed
             if program.metadata is None:
                 program.metadata = {}
             program.metadata["_needs_island_copies"] = True
             return
 
-                                                                       
+        # If the program has a parent, it inherits the parent's island.
         if program.parent_id:
             self.cursor.execute(
                 "SELECT island_idx FROM programs WHERE id = ?", (program.parent_id,)
@@ -169,7 +169,7 @@ class CopyInitialProgramIslandStrategy(IslandStrategy):
                 )
                 return
 
-                                                                            
+        # Check for uninitialized islands (islands with no correct programs)
         islands_with_correct = self.get_initialized_islands()
         islands_without_correct = [
             i for i in range(num_islands) if i not in islands_with_correct
@@ -182,7 +182,7 @@ class CopyInitialProgramIslandStrategy(IslandStrategy):
             )
             return
 
-                                                   
+        # Final fallback: assign to a random island
         program.island_idx = random.randint(0, num_islands - 1)
         logger.debug(
             f"Assigned program {program.id} to random island "
@@ -223,17 +223,17 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
         island_elitism = getattr(self.config, "island_elitism", True)
 
         if num_islands < 2 or migration_rate <= 0:
-            return False                       
+            return False  # No migration needed
 
         logger.info(f"Performing island migration at generation {current_generation}")
 
         migrations_summary = defaultdict(lambda: defaultdict(list))
-                                                   
+        # Track all programs selected for migration
         all_migrated_programs = set()
 
-                                                  
+        # For each island, select migrants to move
         for source_idx in range(num_islands):
-                                           
+            # Count programs in this island
             self.cursor.execute(
                 "SELECT COUNT(*) FROM programs WHERE island_idx = ?",
                 (source_idx,),
@@ -241,20 +241,20 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
             island_size = (self.cursor.fetchone() or [0])[0]
 
             if island_size <= 1:
-                continue                     
+                continue  # Skip tiny islands
 
-                                           
+            # Number of programs to migrate
             num_migrants = max(1, int(island_size * migration_rate))
 
-                                                            
+            # Select destination islands (all except source)
             dest_islands = [i for i in range(num_islands) if i != source_idx]
             if not dest_islands:
                 continue
 
-                                                      
+            # Select migrants based on elitism setting
             migrants = self._select_migrants(source_idx, num_migrants, island_elitism)
 
-                                                                    
+            # Filter out any programs already selected for migration
             unique_migrants = []
             for migrant_id in migrants:
                 if migrant_id not in all_migrated_programs:
@@ -266,7 +266,7 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
                         "migration, skipping duplicate"
                     )
 
-                                                      
+            # Move each unique migrant to a new island
             for migrant_id in unique_migrants:
                 dest_idx = random.choice(dest_islands)
                 self._migrate_program(
@@ -297,17 +297,17 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
         Excludes generation 0 programs (initial programs and their copies)
         and only considers correct programs.
         """
-                                                                     
-                          
+        # Base query excludes generation 0 programs and only includes
+        # correct programs
         selection_query = """
             SELECT id FROM programs
             WHERE island_idx = ? AND generation > 0 AND correct = 1
         """
 
         if island_elitism:
-                                                               
-                                                                         
-                                            
+            # Get IDs of best program to protect from migration
+            # Also exclude generation 0 programs from elite selection and
+            # only consider correct programs
             elite_query = """
                 SELECT id FROM programs
                 WHERE island_idx = ? AND generation > 0 AND correct = 1
@@ -319,7 +319,7 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
             elite_ids = [row["id"] for row in self.cursor.fetchall()]
 
             if elite_ids:
-                                               
+                # Exclude elites from migration
                 placeholders = ",".join(["?"] * len(elite_ids))
                 selection_query += f" AND id NOT IN ({placeholders})"
                 selection_query += " ORDER BY RANDOM() LIMIT ?"
@@ -328,12 +328,12 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
                 selection_query += " ORDER BY RANDOM() LIMIT ?"
                 params = [source_idx, num_migrants]
         else:
-                                                              
-                                    
+            # Simple random selection (excluding generation 0,
+            # only correct programs)
             selection_query += " ORDER BY RANDOM() LIMIT ?"
             params = [source_idx, num_migrants]
 
-                                                                              
+        # First check how many correct non-generation-0 programs are available
         self.cursor.execute(
             "SELECT COUNT(*) FROM programs WHERE island_idx = ? AND "
             "generation > 0 AND correct = 1",
@@ -350,7 +350,7 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
             )
             return []
 
-                                                                      
+        # Adjust num_migrants if there aren't enough eligible programs
         actual_migrants = min(num_migrants, available_programs)
         if actual_migrants != num_migrants:
             logger.debug(
@@ -359,22 +359,22 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
                 f"(only {available_programs} correct eligible programs "
                 f"available)"
             )
-                                                              
+            # Update the params list to use the adjusted count
             if isinstance(params, list) and len(params) > 0:
-                params[-1] = actual_migrants                                  
+                params[-1] = actual_migrants  # Last param is always the LIMIT
 
-                         
+        # Select migrants
         self.cursor.execute(selection_query, params)
         migrants = [row["id"] for row in self.cursor.fetchall()]
 
-                                                                        
+        # Validate uniqueness (should always be true, but good to check)
         if len(migrants) != len(set(migrants)):
             logger.warning(
                 f"Duplicate programs selected for migration from island "
                 f"{source_idx}. Expected {len(migrants)} unique, got "
                 f"{len(set(migrants))} unique."
             )
-            migrants = list(set(migrants))                     
+            migrants = list(set(migrants))  # Remove duplicates
 
         logger.debug(
             f"Selected {len(migrants)} unique correct migrants from island "
@@ -392,7 +392,7 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
         current_generation: int,
     ) -> None:
         """Migrate a single program from source to destination island."""
-                                       
+        # Get current migration history
         self.cursor.execute(
             "SELECT migration_history FROM programs WHERE id = ?", (migrant_id,)
         )
@@ -403,7 +403,7 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
             else []
         )
 
-                                 
+        # Add new migration event
         history.append(
             {
                 "generation": current_generation,
@@ -435,7 +435,7 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
             show_header=True,
             header_style="bold cyan",
             padding=(0, 1),
-            width=120,                                     
+            width=120,  # Match program summary table width
         )
         table.add_column("Source", justify="center", style="cyan", width=8)
         table.add_column("Dest", justify="center", style="magenta", width=6)
@@ -457,7 +457,7 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
 
         for source, destinations in sorted(migrations_summary.items()):
             for dest, progs in sorted(destinations.items()):
-                                                       
+                # Get detailed metrics for each program
                 for prog_id in progs:
                     self.cursor.execute(
                         """SELECT combined_score as score, children_count,
@@ -474,10 +474,10 @@ class ElitistMigrationStrategy(IslandMigrationStrategy):
                         complexity = result["complexity"] or 0
                         metadata = json.loads(result["metadata"] or "{}")
 
-                                      
+                        # Format score
                         score_str = f"{score:.3f}" if score is not None else "N/A"
 
-                                                      
+                        # Get patch info from metadata
                         patch_name = metadata.get("patch_name", "N/A")
                         patch_type = metadata.get("patch_type", "N/A")
 
@@ -610,19 +610,19 @@ class CombinedIslandManager:
             return []
 
         created_ids = []
-                                                           
-                                                   
+        # Create copies for islands 1 through num_islands-1
+        # (original program is already on island 0)
         for island_idx in range(1, num_islands):
-                                     
+            # Create a new program ID
             new_id = str(uuid.uuid4())
-                                                                    
+            # Copy all program data but change the ID and island_idx
             copy_metadata = program.metadata.copy() if program.metadata else {}
-                                                              
+            # Remove the flag that indicates copying is needed
             copy_metadata.pop("_needs_island_copies", None)
-                                                     
+            # Add metadata to indicate this is a copy
             copy_metadata["_is_island_copy"] = True
             copy_metadata["_original_program_id"] = program.id
-                                 
+            # Serialize JSON data
             public_metrics_json = json.dumps(program.public_metrics or {})
             private_metrics_json = json.dumps(program.private_metrics or {})
             metadata_json = json.dumps(copy_metadata)
@@ -632,8 +632,8 @@ class CombinedIslandManager:
             embedding_pca_2d_json = json.dumps(program.embedding_pca_2d or [])
             embedding_pca_3d_json = json.dumps(program.embedding_pca_3d or [])
             migration_history_json = json.dumps(program.migration_history or [])
-                                               
-                                                                     
+            # Insert the copy into the database
+            # Handle text_feedback - convert to string if it's a list
             text_feedback_str = program.text_feedback
             if isinstance(text_feedback_str, list):
                 text_feedback_str = "\n".join(text_feedback_str)
@@ -683,8 +683,8 @@ class CombinedIslandManager:
                 f"for island {island_idx}"
             )
 
-                                                                   
-                                                                        
+            # Add the copied program to the archive if it's correct
+            # This ensures it can be used as inspiration for that island
             if program.correct:
                 self.cursor.execute(
                     "INSERT OR IGNORE INTO archive (program_id) VALUES (?)",

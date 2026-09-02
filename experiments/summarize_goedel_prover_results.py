@@ -1,4 +1,4 @@
-                      
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -183,8 +183,8 @@ def main() -> int:
     attempts = _load_compilation_results(comp_path, field=str(args.field))
     if not attempts:
         _warn(f"no attempts parsed from: {comp_path}")
-                                                                                 
-                                                                    
+        # If an index_json is provided, we can still produce a stable-denominator
+        # summary treating all problems as unsolved with 0 attempts.
         if not args.index_json:
             return 2
         idx = Path(args.index_json).expanduser().resolve()

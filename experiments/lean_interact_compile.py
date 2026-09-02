@@ -1,4 +1,4 @@
-                      
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -17,9 +17,9 @@ def _warn(msg: str) -> None:
 
 
 def _msg_to_dict(m: Any) -> Dict[str, Any]:
-                                                                            
+    # lean_interact.interface.Message is a pydantic model with model_dump().
     try:
-        raw = m.model_dump()                              
+        raw = m.model_dump()  # type: ignore[attr-defined]
     except Exception:
         raw = {}
     start_pos = raw.get("start_pos") or {}
@@ -55,8 +55,8 @@ def _atomic_write_json(path: Path, obj: Any) -> None:
 
 
 def main() -> int:
-                                                                                
-                                                       
+    # This repo standardizes proving compilation on an HTTP Lean server to avoid
+    # local `lean_interact` OOMs and environment drift.
     if os.environ.get("AUTOFORMAL_ALLOW_LEAN_INTERACT", "").strip().lower() not in {"1", "true", "yes"}:
         _warn(
             "lean_interact_compile.py is disabled by default.\n"
@@ -95,15 +95,15 @@ def main() -> int:
     output_path = Path(str(args.output_path)).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-                                                                               
-                                                                          
+    # Ensure we can import `autoformalization.*` from the FormalEvol repo root.
+    # experiments/xxx.py -> autoformalization_v1 -> examples -> FormalEvol
     project_root = Path(__file__).resolve().parents[3]
     sys.path.insert(0, str(project_root))
 
     try:
-        from autoformalization.lean_env import get_lean_server                
-        from lean_interact import Command                
-        from lean_interact.interface import CommandResponse, LeanError                
+        from autoformalization.lean_env import get_lean_server  # type: ignore
+        from lean_interact import Command  # type: ignore
+        from lean_interact.interface import CommandResponse, LeanError  # type: ignore
     except Exception as e:
         _warn(f"import failed: {type(e).__name__}: {e}")
         return 2
